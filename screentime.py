@@ -206,7 +206,7 @@ def main():
         for app, v in a.apps.items():
             totals[app] = totals.get(app, 0) + v
     ranked = [k for k, _ in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)]
-    top = ranked[:8]
+    top = ranked[:40]
     top_set = set(top)
 
     def fold(by):

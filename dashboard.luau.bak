@@ -461,6 +461,35 @@ end
 
 
 
+-- labels under the chart, each one sitting under the first bar of its group
+local function axisRow(bars, width, gap, step)
+  local segW = step * width + (step - 1) * gap
+  local cells = {}
+  for i = 1, #bars, step do
+    local b = bars[i]
+    local lines = {
+      ui.box({ width = 1, height = 4, fill = "outline_variant" }),
+      ui.label({
+        text = b.top or "",
+        fontSize = 11,
+        fontWeight = b.today and "bold" or "normal",
+        color = b.today and "primary" or "on_surface",
+        maxLines = 1,
+      }),
+    }
+    if b.sub ~= nil then
+      table.insert(lines, ui.label({
+        text = b.sub,
+        fontSize = 10,
+        color = b.today and "primary" or "on_surface_variant",
+        maxLines = 1,
+      }))
+    end
+    table.insert(cells, ui.column({ key = "ax" .. i, width = segW, gap = 2, align = "start" }, lines))
+  end
+  return ui.row({ gap = gap, align = "start" }, cells)
+end
+
 local function screenCard(innerW)
   local rows = {}
 

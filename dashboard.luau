@@ -394,6 +394,7 @@ end
 
 
 local screenRange = "today" -- "today" | "3d" | "14d"
+local screenSel = nil -- selected day "YYYY-MM-DD" (3d / 14d views)
 local RANGES = {
   { k = "today", label = "Today", n = 1 },
   { k = "3d", label = "3 days", n = 3 },
@@ -403,14 +404,14 @@ local RANGES = {
 local CHART_H = 84
 
 -- one single-colour bar; the peak is solid, everything else is dimmed
-local function bar(sec, maxSec, width, key, tip, isPeak)
+local function bar(sec, maxSec, width, key, tip, isPeak, onClick)
   local h = 2
   local fill = "surface_container_high"
   if sec > 0 then
     h = math.max(3, math.floor(CHART_H * sec / maxSec))
     fill = isPeak and "primary" or "primary/0.40"
   end
-  return ui.column({ key = key, width = width, height = CHART_H, justify = "end", tooltip = tip }, {
+  return ui.column({ key = key, width = width, height = CHART_H, justify = "end", tooltip = tip, onClick = onClick }, {
     ui.box({ width = width, height = h, radius = math.min(4, math.floor(width / 2)), fill = fill }),
   })
 end
@@ -441,6 +442,7 @@ local function rangeToggle()
       fill = active and "primary" or "surface_container_high/0",
       onClick = function()
         screenRange = r.k
+        screenSel = nil
         update()
       end,
     }, {
@@ -492,6 +494,8 @@ end
 
 local function screenCard(innerW)
   local rows = {}
+  local listRows = {}
+  local listTitle = nil
 
   if screen == nil then
     table.insert(rows, screenMessage("Loading…", innerW))
@@ -512,6 +516,17 @@ local function screenCard(innerW)
       end
     end
     local sums, total = rangeSum(range.n)
+    local selDay = nil
+    if range.k ~= "today" and screenSel ~= nil then
+      for i = math.max(1, #screen.days - range.n + 1), #screen.days do
+        if screen.days[i].d == screenSel then
+          selDay = screen.days[i]
+        end
+      end
+      if selDay ~= nil then
+        sums, total = selDay.by, selDay.sec
+      end
+    end
 
     -- 1. control
     table.insert(rows, rangeToggle())
@@ -537,6 +552,7 @@ local function screenCard(innerW)
           sec = d.sec,
           tip = d.label .. " " .. string.sub(d.d, 9, 10) .. " · " .. fmtDur(d.sec),
           name = d.label,
+          date = d.d,
           top = tostring(tonumber(string.sub(d.d, 9, 10))),
           sub = d.label,
           today = (i == #screen.days),
@@ -559,10 +575,21 @@ local function screenCard(innerW)
     else
       statLabel, statValue = "daily avg", fmtDur(total / range.n)
     end
+    local heroLabel = "total · " .. string.lower(range.label)
+    if selDay ~= nil then
+      local n = 0
+      for id, v in pairs(sums) do
+        if id ~= "_other" and v > 0 then
+          n = n + 1
+        end
+      end
+      statLabel, statValue = "apps used", tostring(n)
+      heroLabel = "total · " .. selDay.label .. " " .. string.sub(selDay.d, 9, 10)
+    end
     table.insert(rows, ui.row({ align = "end", gap = 8 }, {
       ui.column({ gap = 0 }, {
         ui.label({ text = fmtDur(total), fontSize = 28, fontWeight = "bold", color = "on_surface" }),
-        ui.label({ text = "total · " .. string.lower(range.label), fontSize = 11, color = "on_surface_variant" }),
+        ui.label({ text = heroLabel, fontSize = 11, color = "on_surface_variant" }),
       }),
       ui.spacer({ flexGrow = 1 }),
       ui.column({ gap = 0, align = "end" }, {
@@ -577,7 +604,22 @@ local function screenCard(innerW)
       local width = math.max(3, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
       local cols = {}
       for i, b in ipairs(bars) do
-        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, i == peakIdx))
+        local hi = (i == peakIdx)
+        if selDay ~= nil then
+          hi = (b.date == screenSel)
+        end
+        local click = nil
+        if b.date ~= nil then
+          click = function()
+            if screenSel == b.date then
+              screenSel = nil
+            else
+              screenSel = b.date
+            end
+            update()
+          end
+        end
+        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, hi, click))
       end
       local step = 1
       if range.k == "today" then
@@ -596,6 +638,13 @@ local function screenCard(innerW)
 
     -- 5. most used (top 5)
     local list = {}
+    if selDay ~= nil then
+      listTitle = selDay.label .. " " .. string.sub(selDay.d, 9, 10) .. " · apps used"
+    elseif range.k == "today" then
+      listTitle = "Apps used today"
+    else
+      listTitle = "Apps used · " .. string.lower(range.label) .. " (tap a bar to pick a day)"
+    end
     for _, a in ipairs(screen.apps) do
       if (sums[a.id] or 0) > 0 then
         table.insert(list, { a = a, sec = sums[a.id] })
@@ -605,10 +654,10 @@ local function screenCard(innerW)
       return x.sec > y.sec
     end)
     if #list > 0 then
-      table.insert(rows, ui.separator({ thickness = 1, color = "outline_variant/0.4", spacing = 4 }))
-      table.insert(rows, ui.label({ text = "Most used", fontSize = 11, fontWeight = "bold", color = "on_surface_variant" }))
+      
+      
       local top = math.max(list[1].sec, 1)
-      for i = 1, math.min(5, #list) do
+      for i = 1, #list do
         local e = list[i]
         local lead
         if e.a.icon ~= nil and e.a.icon ~= "" then
@@ -616,7 +665,7 @@ local function screenCard(innerW)
         else
           lead = ui.glyph({ name = "app-window", size = 20, color = "on_surface_variant" })
         end
-        table.insert(rows, ui.row({ key = "sa" .. i, gap = 10, align = "center" }, {
+        table.insert(listRows, ui.row({ key = "sa" .. i, gap = 10, align = "center" }, {
           lead,
           ui.column({ gap = 4, flexGrow = 1 }, {
             ui.row({ align = "center", gap = 6 }, {
@@ -630,10 +679,15 @@ local function screenCard(innerW)
     end
   end
 
-  return card({ flexGrow = 1 }, {
-    sectionTitle("device-desktop", "Screen time"),
-    ui.scroll({ gap = 10, flexGrow = 1 }, rows),
-  })
+  local kids = { sectionTitle("device-desktop", "Screen time"), ui.column({ gap = 10 }, rows) }
+  if listTitle ~= nil then
+    table.insert(kids, ui.label({ text = listTitle, fontSize = 11, fontWeight = "bold", color = "on_surface_variant", maxLines = 1 }))
+    if #listRows == 0 then
+      table.insert(listRows, ui.label({ text = "Nothing recorded for this period.", fontSize = 12, color = "on_surface_variant" }))
+    end
+    table.insert(kids, ui.scroll({ gap = 8, flexGrow = 1 }, listRows))
+  end
+  return card({ flexGrow = 1 }, kids)
 end
 
 
