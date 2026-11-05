@@ -459,6 +459,37 @@ local function screenMessage(text, innerW, color)
   return ui.label({ text = text, fontSize = 12, color = color or "on_surface_variant", maxLines = 4, maxWidth = innerW })
 end
 
+
+
+-- labels under the chart, each one sitting under the first bar of its group
+local function axisRow(bars, width, gap, step)
+  local segW = step * width + (step - 1) * gap
+  local cells = {}
+  for i = 1, #bars, step do
+    local b = bars[i]
+    local lines = {
+      ui.box({ width = 1, height = 4, fill = "outline_variant" }),
+      ui.label({
+        text = b.top or "",
+        fontSize = 11,
+        fontWeight = b.today and "bold" or "normal",
+        color = b.today and "primary" or "on_surface",
+        maxLines = 1,
+      }),
+    }
+    if b.sub ~= nil then
+      table.insert(lines, ui.label({
+        text = b.sub,
+        fontSize = 10,
+        color = b.today and "primary" or "on_surface_variant",
+        maxLines = 1,
+      }))
+    end
+    table.insert(cells, ui.column({ key = "ax" .. i, width = segW, gap = 2, align = "start" }, lines))
+  end
+  return ui.row({ gap = gap, align = "start" }, cells)
+end
+
 local function screenCard(innerW)
   local rows = {}
 
@@ -485,26 +516,31 @@ local function screenCard(innerW)
     -- 1. control
     table.insert(rows, rangeToggle())
 
-    -- 2. bars data
-    local bars, edge = {}, {}
+    -- 2. bars data (each bar carries its own axis label)
+    local bars = {}
+    local HOUR_LABELS = { [0] = "12 AM", [6] = "6 AM", [12] = "12 PM", [18] = "6 PM" }
     if range.k == "today" then
       if screen.hours ~= nil and #screen.hours == 24 then
         for i, h in ipairs(screen.hours) do
-          table.insert(bars, { sec = h.sec, tip = string.format("%02d:00 · %s", i - 1, fmtDur(h.sec)), name = string.format("%02d:00", i - 1) })
+          table.insert(bars, {
+            sec = h.sec,
+            tip = string.format("%02d:00 · %s", i - 1, fmtDur(h.sec)),
+            name = string.format("%02d:00", i - 1),
+            top = HOUR_LABELS[i - 1],
+          })
         end
-        edge = { "12 AM", "6 AM", "12 PM", "6 PM" }
       end
     else
       for i = math.max(1, #screen.days - range.n + 1), #screen.days do
         local d = screen.days[i]
-        table.insert(bars, { sec = d.sec, tip = d.label .. " " .. string.sub(d.d, 9, 10) .. " · " .. fmtDur(d.sec), name = d.label })
-        if range.n <= 3 then
-          table.insert(edge, d.label)
-        end
-      end
-      if range.n > 3 and #bars > 0 then
-        local first, last = screen.days[#screen.days - range.n + 1], screen.days[#screen.days]
-        edge = { string.sub(first.d, 6), string.sub(last.d, 6) }
+        table.insert(bars, {
+          sec = d.sec,
+          tip = d.label .. " " .. string.sub(d.d, 9, 10) .. " · " .. fmtDur(d.sec),
+          name = d.label,
+          top = tostring(tonumber(string.sub(d.d, 9, 10))),
+          sub = d.label,
+          today = (i == #screen.days),
+        })
       end
     end
 
@@ -535,7 +571,7 @@ local function screenCard(innerW)
       }),
     }))
 
-    -- 4. chart
+    -- 4. chart + aligned axis
     if #bars > 0 and maxSec > 0 then
       local gap = (#bars > 14) and 3 or 4
       local width = math.max(3, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
@@ -543,27 +579,22 @@ local function screenCard(innerW)
       for i, b in ipairs(bars) do
         table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, i == peakIdx))
       end
+      local step = 1
+      if range.k == "today" then
+        step = 6
+      elseif width < 30 then
+        step = 2
+      end
       table.insert(rows, ui.column({ gap = 4 }, {
         ui.row({ gap = gap, align = "end" }, cols),
         ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 0 }),
+        axisRow(bars, width, gap, step),
       }))
-
-      -- axis: a few evenly spaced labels instead of one per bar
-      local axis = {}
-      for i, t in ipairs(edge) do
-        if i > 1 then
-          table.insert(axis, ui.spacer({ flexGrow = 1 }))
-        end
-        table.insert(axis, ui.label({ text = t, fontSize = 10, color = "on_surface_variant" }))
-      end
-      if #axis > 0 then
-        table.insert(rows, ui.row({ align = "center" }, axis))
-      end
     else
       table.insert(rows, screenMessage("No activity recorded for this range yet.", innerW))
     end
 
-    -- 5. most used (top 5, share of total)
+    -- 5. most used (top 5)
     local list = {}
     for _, a in ipairs(screen.apps) do
       if (sums[a.id] or 0) > 0 then
@@ -604,6 +635,9 @@ local function screenCard(innerW)
     ui.scroll({ gap = 10, flexGrow = 1 }, rows),
   })
 end
+
+
+
 
 ------------------------------------------------------------------ system
 
