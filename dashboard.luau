@@ -392,44 +392,30 @@ end
 
 ------------------------------------------------------------------ screen time (mirrors Noctalia's own Screen Time tab)
 
+
 local screenRange = "today" -- "today" | "3d" | "14d"
 local RANGES = {
   { k = "today", label = "Today", n = 1 },
   { k = "3d", label = "3 days", n = 3 },
   { k = "14d", label = "14 days", n = 14 },
 }
-local CHART_COLORS = { "primary", "secondary", "tertiary", "primary/0.55", "secondary/0.55", "tertiary/0.55", "error/0.7", "on_surface_variant/0.7" }
-local OTHER_COLOR = "outline_variant"
 
-local function appColor(index)
-  return CHART_COLORS[index] or OTHER_COLOR
-end
+local CHART_H = 84
 
--- one stacked bar; the first app sits at the bottom
-local function stackedBar(bar, maxSec, chartH, width, key, tip)
-  local segs = {}
-  local used = 0
-  local order = {}
-  for i = #screen.apps, 1, -1 do
-    table.insert(order, { id = screen.apps[i].id, color = appColor(i) })
+-- one single-colour bar; the peak is solid, everything else is dimmed
+local function bar(sec, maxSec, width, key, tip, isPeak)
+  local h = 2
+  local fill = "surface_container_high"
+  if sec > 0 then
+    h = math.max(3, math.floor(CHART_H * sec / maxSec))
+    fill = isPeak and "primary" or "primary/0.40"
   end
-  table.insert(order, 1, { id = "_other", color = OTHER_COLOR })
-  for _, o in ipairs(order) do
-    local v = bar.by[o.id]
-    if v ~= nil and v > 0 then
-      local h = math.max(1, math.floor(chartH * v / maxSec))
-      used = used + h
-      table.insert(segs, ui.box({ key = key .. o.id, width = width, height = h, radius = 2, fill = o.color }))
-    end
-  end
-  if #segs == 0 then
-    table.insert(segs, ui.box({ key = key .. "e", width = width, height = 1, fill = "surface_container_high" }))
-  end
-  return ui.column({ key = key, height = chartH, width = width, justify = "end", gap = 1, tooltip = tip }, segs)
+  return ui.column({ key = key, width = width, height = CHART_H, justify = "end", tooltip = tip }, {
+    ui.box({ width = width, height = h, radius = math.min(4, math.floor(width / 2)), fill = fill }),
+  })
 end
 
 local function rangeSum(n)
-  -- per-app seconds over the last n days
   local sums, total = {}, 0
   local days = screen.days
   for i = math.max(1, #days - n + 1), #days do
@@ -441,36 +427,50 @@ local function rangeSum(n)
   return sums, total
 end
 
+-- segmented control
+local function rangeToggle()
+  local pills = {}
+  for _, r in ipairs(RANGES) do
+    local active = r.k == screenRange
+    table.insert(pills, ui.row({
+      key = "rg" .. r.k,
+      flexGrow = 1,
+      justify = "center",
+      paddingV = 6,
+      radius = 9,
+      fill = active and "primary" or "surface_container_high/0",
+      onClick = function()
+        screenRange = r.k
+        update()
+      end,
+    }, {
+      ui.label({
+        text = r.label,
+        fontSize = 12,
+        fontWeight = active and "bold" or "normal",
+        color = active and "on_primary" or "on_surface_variant",
+      }),
+    }))
+  end
+  return ui.row({ gap = 2, padding = 3, radius = 12, fill = "surface_container_high" }, pills)
+end
+
+local function screenMessage(text, innerW, color)
+  return ui.label({ text = text, fontSize = 12, color = color or "on_surface_variant", maxLines = 4, maxWidth = innerW })
+end
+
 local function screenCard(innerW)
   local rows = {}
-  local right = nil
+
   if screen == nil then
-    table.insert(rows, ui.label({ text = "Loading…", fontSize = 13, color = "on_surface_variant" }))
+    table.insert(rows, screenMessage("Loading…", innerW))
   elseif screen.ok ~= true then
     if screen.noPython then
-      table.insert(rows, ui.label({
-        text = "Screen time needs python3. Install it with: sudo pacman -S python",
-        fontSize = 12,
-        color = "on_surface_variant",
-        maxLines = 3,
-        maxWidth = innerW,
-      }))
+      table.insert(rows, screenMessage("Screen time needs python3. Install it with: sudo pacman -S python", innerW))
     elseif screen.missing then
-      table.insert(rows, ui.label({
-        text = "No screen time file yet. Turn on Screen Time in Noctalia settings and use your apps for a bit.",
-        fontSize = 12,
-        color = "on_surface_variant",
-        maxLines = 4,
-        maxWidth = innerW,
-      }))
+      table.insert(rows, screenMessage("No screen time file yet. Turn on Screen Time in Noctalia settings and use your apps for a bit.", innerW))
     else
-      table.insert(rows, ui.label({
-        text = "I couldn't read Noctalia's screen time file format yet. Send this snippet to Claude to fix it:",
-        fontSize = 12,
-        color = "on_surface_variant",
-        maxLines = 3,
-        maxWidth = innerW,
-      }))
+      table.insert(rows, screenMessage("Couldn't read Noctalia's screen time file format.", innerW))
       table.insert(rows, ui.label({ text = tostring(screen.sample or ""), fontSize = 10, color = "on_surface", maxLines = 8, maxWidth = innerW }))
     end
   else
@@ -480,97 +480,90 @@ local function screenCard(innerW)
         range = r
       end
     end
-
-    -- range toggle
-    local toggles = {}
-    for _, r in ipairs(RANGES) do
-      local active = r.k == screenRange
-      table.insert(toggles, ui.row({
-        key = "rg" .. r.k,
-        flexGrow = 1,
-        justify = "center",
-        paddingV = 5,
-        radius = 10,
-        fill = active and "primary" or "surface_container_high",
-        onClick = function()
-          screenRange = r.k
-          update()
-        end,
-      }, {
-        ui.label({ text = r.label, fontSize = 12, fontWeight = active and "bold" or "normal", color = active and "on_primary" or "on_surface_variant" }),
-      }))
-    end
-    table.insert(rows, ui.row({ gap = 6 }, toggles))
-
     local sums, total = rangeSum(range.n)
-    table.insert(rows, ui.row({ align = "end", gap = 8 }, {
-      ui.label({ text = fmtDur(total), fontSize = 24, fontWeight = "bold", color = "on_surface" }),
-      ui.label({ text = "total · " .. string.lower(range.label), fontSize = 12, color = "on_surface_variant" }),
-    }))
-    right = nil
 
-    -- stacked bar chart: hourly for today, per day otherwise
-    local bars, labels = {}, {}
+    -- 1. control
+    table.insert(rows, rangeToggle())
+
+    -- 2. bars data
+    local bars, edge = {}, {}
     if range.k == "today" then
       if screen.hours ~= nil and #screen.hours == 24 then
         for i, h in ipairs(screen.hours) do
-          table.insert(bars, { bar = h, tip = string.format("%02d:00 · %s", i - 1, fmtDur(h.sec)) })
-          table.insert(labels, (i - 1) % 6 == 0 and tostring(i - 1) or "")
+          table.insert(bars, { sec = h.sec, tip = string.format("%02d:00 · %s", i - 1, fmtDur(h.sec)), name = string.format("%02d:00", i - 1) })
         end
+        edge = { "12 AM", "6 AM", "12 PM", "6 PM" }
       end
     else
       for i = math.max(1, #screen.days - range.n + 1), #screen.days do
-        local day = screen.days[i]
-        table.insert(bars, { bar = day, tip = day.label .. " " .. string.sub(day.d, 9, 10) .. " · " .. fmtDur(day.sec) })
-        table.insert(labels, range.n <= 3 and string.sub(day.label, 1, 3) or string.sub(day.d, 9, 10))
-      end
-    end
-    if #bars > 0 then
-      local maxSec = 1
-      for _, b in ipairs(bars) do
-        if b.bar.sec > maxSec then
-          maxSec = b.bar.sec
+        local d = screen.days[i]
+        table.insert(bars, { sec = d.sec, tip = d.label .. " " .. string.sub(d.d, 9, 10) .. " · " .. fmtDur(d.sec), name = d.label })
+        if range.n <= 3 then
+          table.insert(edge, d.label)
         end
       end
-      local gap = 3
-      local width = math.max(4, math.min(34, math.floor((innerW - (#bars - 1) * gap) / #bars)))
+      if range.n > 3 and #bars > 0 then
+        local first, last = screen.days[#screen.days - range.n + 1], screen.days[#screen.days]
+        edge = { string.sub(first.d, 6), string.sub(last.d, 6) }
+      end
+    end
+
+    local maxSec, peakIdx = 0, 0
+    for i, b in ipairs(bars) do
+      if b.sec > maxSec then
+        maxSec = b.sec
+        peakIdx = i
+      end
+    end
+
+    -- 3. hero number + one supporting stat
+    local statLabel, statValue
+    if range.k == "today" then
+      statLabel, statValue = "peak hour", (peakIdx > 0) and bars[peakIdx].name or "–"
+    else
+      statLabel, statValue = "daily avg", fmtDur(total / range.n)
+    end
+    table.insert(rows, ui.row({ align = "end", gap = 8 }, {
+      ui.column({ gap = 0 }, {
+        ui.label({ text = fmtDur(total), fontSize = 28, fontWeight = "bold", color = "on_surface" }),
+        ui.label({ text = "total · " .. string.lower(range.label), fontSize = 11, color = "on_surface_variant" }),
+      }),
+      ui.spacer({ flexGrow = 1 }),
+      ui.column({ gap = 0, align = "end" }, {
+        ui.label({ text = statValue, fontSize = 15, fontWeight = "bold", color = "on_surface", textAlign = "right" }),
+        ui.label({ text = statLabel, fontSize = 11, color = "on_surface_variant", textAlign = "right" }),
+      }),
+    }))
+
+    -- 4. chart
+    if #bars > 0 and maxSec > 0 then
+      local gap = (#bars > 14) and 3 or 4
+      local width = math.max(3, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
       local cols = {}
       for i, b in ipairs(bars) do
-        table.insert(cols, ui.column({ key = "sb" .. i, gap = 3, align = "center" }, {
-          stackedBar(b.bar, maxSec, 64, width, "sb" .. i .. ":", b.tip),
-          ui.label({ text = labels[i], fontSize = 9, color = "on_surface_variant" }),
-        }))
+        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, i == peakIdx))
       end
-      table.insert(rows, ui.row({ gap = gap, align = "end" }, cols))
+      table.insert(rows, ui.column({ gap = 4 }, {
+        ui.row({ gap = gap, align = "end" }, cols),
+        ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 0 }),
+      }))
 
-      -- legend (chart colours only), up to three per row
-      local legend, line = {}, {}
-      local function flush()
-        if #line > 0 then
-          table.insert(legend, ui.row({ gap = 10, align = "center" }, line))
-          line = {}
+      -- axis: a few evenly spaced labels instead of one per bar
+      local axis = {}
+      for i, t in ipairs(edge) do
+        if i > 1 then
+          table.insert(axis, ui.spacer({ flexGrow = 1 }))
         end
+        table.insert(axis, ui.label({ text = t, fontSize = 10, color = "on_surface_variant" }))
       end
-      for i, a in ipairs(screen.apps) do
-        if sums[a.id] ~= nil then
-          table.insert(line, ui.row({ gap = 4, align = "center" }, {
-            ui.box({ width = 8, height = 8, radius = 4, fill = appColor(i) }),
-            ui.label({ text = a.name, fontSize = 10, color = "on_surface_variant", maxLines = 1 }),
-          }))
-          if #line == 3 then
-            flush()
-          end
-        end
-      end
-      flush()
-      if #legend > 0 then
-        table.insert(rows, ui.column({ gap = 3 }, legend))
+      if #axis > 0 then
+        table.insert(rows, ui.row({ align = "center" }, axis))
       end
     else
-      table.insert(rows, ui.label({ text = "No hourly data in the file for today.", fontSize = 11, color = "on_surface_variant" }))
+      table.insert(rows, screenMessage("No activity recorded for this range yet.", innerW))
     end
 
-    -- most used (neutral bars)
+    -- 5. most used (top 5, share of total)
     local list = {}
     for _, a in ipairs(screen.apps) do
       if (sums[a.id] or 0) > 0 then
@@ -580,34 +573,35 @@ local function screenCard(innerW)
     table.sort(list, function(x, y)
       return x.sec > y.sec
     end)
-    table.insert(rows, ui.label({ text = "Most used", fontSize = 11, color = "on_surface_variant" }))
-    if #list == 0 then
-      table.insert(rows, ui.label({ text = "Nothing recorded for this range yet.", fontSize = 12, color = "on_surface_variant" }))
-    else
+    if #list > 0 then
+      table.insert(rows, ui.separator({ thickness = 1, color = "outline_variant/0.4", spacing = 4 }))
+      table.insert(rows, ui.label({ text = "Most used", fontSize = 11, fontWeight = "bold", color = "on_surface_variant" }))
       local top = math.max(list[1].sec, 1)
-      for i, e in ipairs(list) do
+      for i = 1, math.min(5, #list) do
+        local e = list[i]
         local lead
         if e.a.icon ~= nil and e.a.icon ~= "" then
-          lead = ui.image({ path = e.a.icon, width = 20, height = 20, fit = "contain" })
+          lead = ui.image({ path = e.a.icon, width = 22, height = 22, fit = "contain" })
         else
-          lead = ui.glyph({ name = "app-window", size = 18, color = "on_surface_variant" })
+          lead = ui.glyph({ name = "app-window", size = 20, color = "on_surface_variant" })
         end
-        table.insert(rows, ui.row({ key = "sa" .. i, gap = 8, align = "center" }, {
+        table.insert(rows, ui.row({ key = "sa" .. i, gap = 10, align = "center" }, {
           lead,
-          ui.column({ gap = 3, flexGrow = 1 }, {
-            ui.row({ align = "center" }, {
+          ui.column({ gap = 4, flexGrow = 1 }, {
+            ui.row({ align = "center", gap = 6 }, {
               ui.label({ text = e.a.name, fontSize = 12, color = "on_surface", maxLines = 1, flexGrow = 1 }),
-              ui.label({ text = fmtDur(e.sec), fontSize = 12, color = "on_surface_variant" }),
+              ui.label({ text = fmtDur(e.sec), fontSize = 12, fontWeight = "bold", color = "on_surface" }),
             }),
-            ui.progress({ progress = e.sec / top, fill = "outline", track = "surface_container_high", radius = 3, height = 5 }),
+            ui.progress({ progress = e.sec / top, fill = "primary/0.40", track = "surface_container_high", radius = 3, height = 4 }),
           }),
         }))
       end
     end
   end
+
   return card({ flexGrow = 1 }, {
-    sectionTitle("device-desktop", "Screen time", right),
-    ui.scroll({ gap = 8, flexGrow = 1 }, rows),
+    sectionTitle("device-desktop", "Screen time"),
+    ui.scroll({ gap = 10, flexGrow = 1 }, rows),
   })
 end
 
