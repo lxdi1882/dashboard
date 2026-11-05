@@ -1,0 +1,16 @@
+{
+  "settings.name_override.label": "Name override (empty = your Linux user)",
+  "settings.avatar_path.label": "Profile picture",
+  "settings.github_user.label": "GitHub username",
+  "settings.graph_palette.label": "Contribution graph colors",
+  "settings.graph_palette.theme": "Follow Noctalia theme",
+  "settings.graph_palette.github": "GitHub greens",
+  "settings.todo_file.label": "To Do file (todo.json)",
+  "settings.window_size.label": "Dashboard window size",
+  "settings.window_size.compact": "Compact",
+  "settings.window_size.normal": "Normal",
+  "settings.window_size.large": "Large",
+  "settings.graph_size.label": "GitHub graph size",
+  "settings.graph_size.large": "Large (full width)",
+  "settings.graph_size.compact": "Compact (System card beside it)"
+}

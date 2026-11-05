@@ -1,0 +1,81 @@
+id          = "lat/dashboard"
+name        = "Dashboard"
+version     = "1.0.0"
+plugin_api  = 43
+author      = "lat"
+license     = "MIT"
+icon        = "layout-dashboard"
+description = "Full-screen dashboard on a keybind: GitHub graph, to-do, calendar, screen time, uptime."
+tags        = ["dashboard", "productivity"]
+
+[[setting]]
+key       = "name_override"
+type      = "string"
+label_key = "settings.name_override.label"
+default   = ""
+
+[[setting]]
+key       = "avatar_path"
+type      = "file"
+label_key = "settings.avatar_path.label"
+default   = "~/.face"
+extensions = [".png", ".jpg", ".jpeg", ".webp"]
+
+[[setting]]
+key       = "github_user"
+type      = "string"
+label_key = "settings.github_user.label"
+default   = "lxdi1882"
+
+[[setting]]
+key       = "graph_palette"
+type      = "select"
+label_key = "settings.graph_palette.label"
+default   = "theme"
+options   = [
+  { value = "theme",  label_key = "settings.graph_palette.theme" },
+  { value = "github", label_key = "settings.graph_palette.github" },
+]
+
+[[setting]]
+key       = "window_size"
+type      = "select"
+label_key = "settings.window_size.label"
+default   = "large"
+options   = [
+  { value = "compact", label_key = "settings.window_size.compact" },
+  { value = "normal",  label_key = "settings.window_size.normal" },
+  { value = "large",   label_key = "settings.window_size.large" },
+]
+
+[[setting]]
+key       = "graph_size"
+type      = "select"
+label_key = "settings.graph_size.label"
+default   = "large"
+options   = [
+  { value = "large",   label_key = "settings.graph_size.large" },
+  { value = "compact", label_key = "settings.graph_size.compact" },
+]
+
+[[setting]]
+key       = "todo_file"
+type      = "file"
+label_key = "settings.todo_file.label"
+default   = "~/Documents/Todo/todo.json"
+extensions = [".json"]
+
+# Headless service: gathers data and handles `noctalia msg plugin ... toggle`.
+[[service]]
+id    = "data"
+entry = "service.luau"
+
+# The full-screen overlay itself.
+[[layer]]
+id             = "screen"
+entry          = "dashboard.luau"
+layer          = "overlay"
+anchors        = ["top", "bottom", "left", "right"]
+exclusive_zone = -1
+keyboard       = "on_demand"
+output         = "focused"
