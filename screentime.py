@@ -206,7 +206,8 @@ def main():
         for app, v in a.apps.items():
             totals[app] = totals.get(app, 0) + v
     ranked = [k for k, _ in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)]
-    top = ranked[:40]
+    limit = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 12
+    top = ranked[:limit]
     top_set = set(top)
 
     def fold(by):
@@ -235,6 +236,8 @@ def main():
         "ok": True,
         "sec": days[-1]["sec"],
         "apps": [{"id": k, "name": k, "icon": icons.get(k.lower(), "")} for k in top],
+        "hidden": len(ranked) - len(top),
+        "expanded": limit > 12,
         "days": days,
         "hours": hours,
     }))

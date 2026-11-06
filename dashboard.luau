@@ -17,13 +17,20 @@ local profile = noctalia.state.get("profile")
 local gridCache = nil
 local gridKey = ""
 local hoverDay = nil -- { d = "YYYY-MM-DD", c = count }
+local loadingMore = false
+local loadingSince = 0
 
 noctalia.state.watch("gh", function(v)
   gh = v
   gridCache = nil
 end)
 noctalia.state.watch("todo", function(v) todo = v end)
-noctalia.state.watch("screen", function(v) screen = v end)
+noctalia.state.watch("screen", function(v)
+  screen = v
+  if loadingMore and (v == nil or v.expanded == true or (v.hidden or 0) == 0) then
+    loadingMore = false
+  end
+end)
 noctalia.state.watch("events", function(v) events = v end)
 noctalia.state.watch("uptime", function(v) uptimeSec = v end)
 noctalia.state.watch("profile", function(v) profile = v end)
@@ -496,6 +503,7 @@ local function screenCard(innerW)
   local rows = {}
   local listRows = {}
   local listTitle = nil
+  local otherSec = 0
 
   if screen == nil then
     table.insert(rows, screenMessage("Loading…", innerW))
@@ -638,6 +646,7 @@ local function screenCard(innerW)
 
     -- 5. most used (top 5)
     local list = {}
+    otherSec = sums["_other"] or 0
     if selDay ~= nil then
       listTitle = selDay.label .. " " .. string.sub(selDay.d, 9, 10) .. " · apps used"
     elseif range.k == "today" then
@@ -686,6 +695,36 @@ local function screenCard(innerW)
       table.insert(listRows, ui.label({ text = "Nothing recorded for this period.", fontSize = 12, color = "on_surface_variant" }))
     end
     table.insert(kids, ui.scroll({ gap = 8, flexGrow = 1 }, listRows))
+    local hidden = otherSec
+    if loadingMore and os.time() - loadingSince > 20 then
+      loadingMore = false
+    end
+    if loadingMore then
+      local dots = string.rep(".", os.time() % 3 + 1)
+      table.insert(kids, ui.row({ gap = 8, align = "center", justify = "center", paddingV = 7 }, {
+        ui.glyph({ name = "loader-2", size = 16, color = "primary" }),
+        ui.label({ text = "Loading more apps" .. dots, fontSize = 12, color = "on_surface_variant" }),
+      }))
+    elseif hidden > 0 and not (screen ~= nil and screen.expanded) then
+      table.insert(kids, ui.row({
+        key = "more-apps",
+        gap = 6,
+        align = "center",
+        justify = "center",
+        paddingV = 7,
+        radius = 10,
+        fill = "surface_container_high",
+        onClick = function()
+          loadingMore = true
+          loadingSince = os.time()
+          noctalia.state.set("screen_more_req", noctalia.nowMs())
+          update()
+        end,
+      }, {
+        ui.glyph({ name = "chevron-down", size = 15, color = "primary" }),
+        ui.label({ text = "Show more apps (+" .. fmtDur(hidden) .. " in smaller ones)", fontSize = 12, color = "on_surface" }),
+      }))
+    end
   end
   return card({ flexGrow = 1 }, kids)
 end

@@ -99,6 +99,8 @@ local function iconFor(app)
 end
 
 local screenBusy = false
+local screenLimit = 12
+local screenAgain = false
 
 local function refreshScreenTime()
   if screenBusy then
@@ -114,7 +116,7 @@ local function refreshScreenTime()
   end
   local file = stateHome() .. "/noctalia/screen_time.json"
   screenBusy = true
-  local started = noctalia.runAsync({ "python3", dir .. "/screentime.py", file }, function(result)
+  local started = noctalia.runAsync({ "python3", dir .. "/screentime.py", file, tostring(screenLimit) }, function(result)
     screenBusy = false
     if result.exitCode ~= 0 then
       noctalia.log("screentime.py failed: " .. tostring(result.stderr))
@@ -138,6 +140,10 @@ local function refreshScreenTime()
       end
     end
     noctalia.state.set("screen", r)
+    if screenAgain then
+      screenAgain = false
+      refreshScreenTime()
+    end
   end)
   if not started then
     screenBusy = false
@@ -350,6 +356,9 @@ end
 
 local function setVisible(v)
   visible = v
+  if not v then
+    screenLimit = 12
+  end
   noctalia.state.set("visible", v)
   noctalia.log("dashboard: " .. (v and "show" or "hide"))
   if v then
@@ -387,6 +396,15 @@ noctalia.state.watch("refresh_req", function(_)
 end)
 
 -- the layer edits the to-do file itself and asks for a re-read afterwards
+noctalia.state.watch("screen_more_req", function(_)
+  screenLimit = 40
+  if screenBusy then
+    screenAgain = true
+  else
+    refreshScreenTime()
+  end
+end)
+
 noctalia.state.watch("todo_req", function(_)
   refreshTodo()
 end)
