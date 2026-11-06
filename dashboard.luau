@@ -17,6 +17,8 @@ local profile = noctalia.state.get("profile")
 local gridCache = nil
 local gridKey = ""
 local hoverDay = nil -- { d = "YYYY-MM-DD", c = count }
+local ghLoading = false
+local ghLoadingSince = 0
 local loadingMore = false
 local loadingSince = 0
 
@@ -34,6 +36,9 @@ end)
 noctalia.state.watch("events", function(v) events = v end)
 noctalia.state.watch("uptime", function(v) uptimeSec = v end)
 noctalia.state.watch("profile", function(v) profile = v end)
+local ghCommits = noctalia.state.get("gh_commits")
+noctalia.state.watch("gh_commits", function(v) ghCommits = v end)
+noctalia.state.watch("gh_done", function(_) ghLoading = false end)
 
 ------------------------------------------------------------------ actions
 
@@ -150,7 +155,7 @@ end
 
 ------------------------------------------------------------------ small UI pieces
 
-local function sectionTitle(glyph, text, right)
+local function sectionTitle(glyph, text, right, action)
   local children = {
     ui.glyph({ name = glyph, size = 18, color = "primary" }),
     ui.label({ text = text, fontSize = 15, fontWeight = "bold", color = "on_surface" }),
@@ -158,6 +163,9 @@ local function sectionTitle(glyph, text, right)
   }
   if right ~= nil then
     table.insert(children, ui.label({ text = right, fontSize = 12, color = "on_surface_variant" }))
+  end
+  if action ~= nil then
+    table.insert(children, action)
   end
   return ui.row({ gap = 8, align = "center" }, children)
 end
@@ -271,6 +279,31 @@ local function buildGrid(cell, gap)
   return ui.row({ gap = gap, align = "start" }, cols)
 end
 
+local function ghRefreshButton()
+  if ghLoading and os.time() - ghLoadingSince > 15 then
+    ghLoading = false
+  end
+  if ghLoading then
+    local dots = string.rep(".", os.time() % 3 + 1)
+    return ui.row({ gap = 6, align = "center" }, {
+      ui.glyph({ name = "loader-2", size = 14, color = "primary" }),
+      ui.label({ text = "Updating" .. dots, fontSize = 11, color = "on_surface_variant" }),
+    })
+  end
+  return ui.button({
+    glyph = "refresh",
+    variant = "ghost",
+    controlSize = "sm",
+    tooltip = "Refresh GitHub data",
+    onClick = function()
+      ghLoading = true
+      ghLoadingSince = os.time()
+      noctalia.state.set("gh_req", noctalia.nowMs())
+      update()
+    end,
+  })
+end
+
 -- The card is sized to its graph (not stretched across the column). Returns the card.
 local function githubCard(inner, cell, gap, cardWidth)
   local body
@@ -296,6 +329,9 @@ local function githubCard(inner, cell, gap, cardWidth)
       stat(gh.best .. (gh.best == 1 and " day" or " days"), "longest"),
       stat(tostring(gh.maxDay), "best day"),
     }
+    if ghCommits ~= nil and ghCommits.ok == true and ghCommits.user == noctalia.getConfig("github_user") then
+      table.insert(statsRow, stat(tostring(ghCommits.n), "commits · " .. ghCommits.year))
+    end
     table.insert(statsRow, ui.spacer({ flexGrow = 1 }))
     if inner >= 440 then
       local legend = { ui.label({ text = "Less", fontSize = 10, color = "on_surface_variant" }) }
@@ -314,10 +350,10 @@ local function githubCard(inner, cell, gap, cardWidth)
   if hoverDay ~= nil then
     right = hoverDay.c .. (hoverDay.c == 1 and " contribution" or " contributions") .. " · " .. os.date("%a, %b %d", dateToTime(hoverDay.d))
   elseif gh ~= nil and gh.ok == true then
-    right = gh.total .. " this year"
+    right = gh.total .. " contributions · past year"
   end
   return card({ width = cardWidth, padding = 14, gap = 8 }, {
-    sectionTitle("brand-github", "GitHub · " .. tostring(noctalia.getConfig("github_user")), right),
+    sectionTitle("brand-github", "GitHub · " .. tostring(noctalia.getConfig("github_user")), right, ghRefreshButton()),
     body,
   })
 end

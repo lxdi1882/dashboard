@@ -282,6 +282,30 @@ local function cachePath()
   return dir .. "/github.json"
 end
 
+local function refreshCommits()
+  local user = noctalia.getConfig("github_user")
+  if user == nil or user == "" then
+    return
+  end
+  local year = os.date("%Y")
+  local q = noctalia.string.urlEncode("author:" .. user .. " author-date:>=" .. year .. "-01-01")
+  noctalia.http({
+    url = "https://api.github.com/search/commits?per_page=1&q=" .. q,
+    method = "GET",
+    headers = { "Accept: application/vnd.github+json", "User-Agent: noctalia-dashboard" },
+    follow_redirects = true,
+  }, function(res)
+    if not res.ok or res.status ~= 200 then
+      return
+    end
+    local data = noctalia.json.decode(res.body)
+    if data == nil or type(data.total_count) ~= "number" then
+      return
+    end
+    noctalia.state.set("gh_commits", { ok = true, n = math.floor(data.total_count), year = year, user = user })
+  end)
+end
+
 local function refreshGithub()
   local user = noctalia.getConfig("github_user")
   if user == nil or user == "" then
@@ -297,6 +321,7 @@ local function refreshGithub()
     local current = noctalia.state.get("gh")
     local function fail(msg)
       lastGithub = noctalia.nowMs() - 25 * 60000 -- retry in ~5 minutes
+      noctalia.state.set("gh_done", noctalia.nowMs())
       if current == nil or current.ok ~= true then
         noctalia.state.set("gh", { ok = false, err = msg })
       end
@@ -315,6 +340,8 @@ local function refreshGithub()
       total = data.total.lastYear
     end
     publishGithub(data.contributions, user, total)
+    noctalia.state.set("gh_done", noctalia.nowMs())
+    refreshCommits()
     local p = cachePath()
     if p ~= nil then
       noctalia.writeFile(p, noctalia.json.encode({ user = user, total = total, contributions = data.contributions }))
@@ -417,6 +444,11 @@ noctalia.state.watch("screen_more_req", function(_)
   else
     refreshScreenTime()
   end
+end)
+
+noctalia.state.watch("gh_req", function(_)
+  lastGithub = noctalia.nowMs()
+  refreshGithub()
 end)
 
 noctalia.state.watch("todo_req", function(_)
