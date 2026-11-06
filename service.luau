@@ -86,8 +86,13 @@ end
 -- budget per callback. The helper prints a tiny JSON summary.
 
 local iconCache = {}
+local iconBudget = 6 -- new icon lookups allowed per refresh, keeps the callback fast
 local function iconFor(app)
   if iconCache[app] == nil then
+    if iconBudget <= 0 then
+      return ""
+    end
+    iconBudget = iconBudget - 1
     iconCache[app] = noctalia.appIconPath(app, 24) or ""
   end
   return iconCache[app]
@@ -122,6 +127,7 @@ local function refreshScreenTime()
       return
     end
     if r.ok == true and r.apps ~= nil then
+      iconBudget = 6
       for _, a in ipairs(r.apps) do
         local iconName = (a.icon ~= nil and a.icon ~= "") and a.icon or a.id
         local path = iconFor(iconName)
