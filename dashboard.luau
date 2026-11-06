@@ -402,6 +402,12 @@ end
 
 local screenRange = "today" -- "today" | "3d" | "14d"
 local screenSel = nil -- selected day "YYYY-MM-DD" (3d / 14d views)
+local screenFocus = false -- apps list expanded to fill the card
+noctalia.state.watch("visible", function(v)
+  if not v then
+    screenFocus = false
+  end
+end)
 local RANGES = {
   { k = "today", label = "Today", n = 1 },
   { k = "3d", label = "3 days", n = 3 },
@@ -504,6 +510,7 @@ local function screenCard(innerW)
   local listRows = {}
   local listTitle = nil
   local otherSec = 0
+  local focusTotal, focusLabel = 0, ""
 
   if screen == nil then
     table.insert(rows, screenMessage("Loading…", innerW))
@@ -594,6 +601,7 @@ local function screenCard(innerW)
       statLabel, statValue = "apps used", tostring(n)
       heroLabel = "total · " .. selDay.label .. " " .. string.sub(selDay.d, 9, 10)
     end
+    focusTotal, focusLabel = total, heroLabel
     table.insert(rows, ui.row({ align = "end", gap = 8 }, {
       ui.column({ gap = 0 }, {
         ui.label({ text = fmtDur(total), fontSize = 28, fontWeight = "bold", color = "on_surface" }),
@@ -652,7 +660,7 @@ local function screenCard(innerW)
     elseif range.k == "today" then
       listTitle = "Apps used today"
     else
-      listTitle = "Apps used · " .. string.lower(range.label) .. " (tap a bar to pick a day)"
+      listTitle = "Apps used · " .. string.lower(range.label) .. (screenFocus and "" or " (tap a bar to pick a day)")
     end
     for _, a in ipairs(screen.apps) do
       if (sums[a.id] or 0) > 0 then
@@ -679,7 +687,7 @@ local function screenCard(innerW)
           ui.column({ gap = 4, flexGrow = 1 }, {
             ui.row({ align = "center", gap = 6 }, {
               ui.label({ text = e.a.name, fontSize = 12, color = "on_surface", maxLines = 1, flexGrow = 1 }),
-              ui.label({ text = fmtDur(e.sec), fontSize = 12, fontWeight = "bold", color = "on_surface" }),
+              ui.label({ text = fmtDur(e.sec) .. (screenFocus and ("  ·  " .. string.format("%d%%", math.floor(100 * e.sec / math.max(total, 1) + 0.5))) or ""), fontSize = 12, fontWeight = "bold", color = "on_surface" }),
             }),
             ui.progress({ progress = e.sec / top, fill = "primary/0.40", track = "surface_container_high", radius = 3, height = 4 }),
           }),
@@ -690,7 +698,20 @@ local function screenCard(innerW)
 
   local kids = { sectionTitle("device-desktop", "Screen time"), ui.column({ gap = 10 }, rows) }
   if listTitle ~= nil then
-    table.insert(kids, ui.label({ text = listTitle, fontSize = 11, fontWeight = "bold", color = "on_surface_variant", maxLines = 1 }))
+    local headKids = { ui.label({ text = listTitle, fontSize = 11, fontWeight = "bold", color = "on_surface_variant", maxLines = 1, flexGrow = 1 }) }
+    if not screenFocus then
+      table.insert(headKids, ui.button({
+        glyph = "arrows-maximize",
+        variant = "ghost",
+        controlSize = "sm",
+        tooltip = "Expand",
+        onClick = function()
+          screenFocus = true
+          update()
+        end,
+      }))
+    end
+    table.insert(kids, ui.row({ gap = 6, align = "center" }, headKids))
     if #listRows == 0 then
       table.insert(listRows, ui.label({ text = "Nothing recorded for this period.", fontSize = 12, color = "on_surface_variant" }))
     end
@@ -725,6 +746,28 @@ local function screenCard(innerW)
         ui.label({ text = "Show more apps (+" .. fmtDur(hidden) .. " in smaller ones)", fontSize = 12, color = "on_surface" }),
       }))
     end
+  end
+  if screenFocus and listTitle ~= nil then
+    kids[1] = ui.row({ gap = 8, align = "center" }, {
+      ui.button({
+        glyph = "arrow-left",
+        variant = "ghost",
+        controlSize = "sm",
+        tooltip = "Back",
+        onClick = function()
+          screenFocus = false
+          update()
+        end,
+      }),
+      ui.label({ text = "Screen time", fontSize = 15, fontWeight = "bold", color = "on_surface" }),
+    })
+    kids[2] = ui.column({ gap = 10 }, {
+      rangeToggle(),
+      ui.column({ gap = 0 }, {
+        ui.label({ text = fmtDur(focusTotal), fontSize = 28, fontWeight = "bold", color = "on_surface" }),
+        ui.label({ text = focusLabel, fontSize = 11, color = "on_surface_variant" }),
+      }),
+    })
   end
   return card({ flexGrow = 1 }, kids)
 end
