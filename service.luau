@@ -9,6 +9,7 @@ local Todo = require("./lib/todo.luau")
 local tick = 0
 local lastGithub = 0
 local visible = false
+local closeAskedAt = 0
 local DAY_MS = 86400000
 
 ------------------------------------------------------------------ helpers
@@ -356,6 +357,7 @@ end
 
 local function setVisible(v)
   visible = v
+  closeAskedAt = 0
   if not v then
     screenLimit = 12
   end
@@ -369,14 +371,26 @@ local function setVisible(v)
   end
 end
 
+-- ask the layer to play its close animation; it answers with close_req when done
+local function requestClose()
+  closeAskedAt = noctalia.nowMs()
+  noctalia.state.set("anim_close", closeAskedAt)
+end
+
 function onIpc(event, payload)
   noctalia.log("dashboard ipc '" .. tostring(event) .. "' (visible=" .. tostring(visible) .. ")")
   if event == "toggle" then
-    setVisible(not visible)
+    if visible then
+      requestClose()
+    else
+      setVisible(true)
+    end
   elseif event == "show" then
     setVisible(true)
   elseif event == "hide" then
-    setVisible(false)
+    if visible then
+      requestClose()
+    end
   elseif event == "refresh" then
     refreshAll()
     lastGithub = 0
@@ -411,6 +425,10 @@ end)
 
 function update()
   tick = tick + 1
+  -- safety net: if the layer never answered the close request, hide anyway
+  if visible and closeAskedAt > 0 and noctalia.nowMs() - closeAskedAt > 2500 then
+    setVisible(false)
+  end
   refreshUptime()
   if tick % 3 == 1 then
     refreshTodo()

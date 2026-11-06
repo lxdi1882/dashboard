@@ -37,10 +37,45 @@ noctalia.state.watch("profile", function(v) profile = v end)
 
 ------------------------------------------------------------------ actions
 
-local function closeDash()
+-- open/close animation: fade + slide, driven by time so it still lands if frame ticks are missed
+local ANIM_MS = 150
+local SLIDE = 28 -- spacer height; the card moves half of this
+local animStart = noctalia.nowMs()
+local animClosing = false
+layer.setNeedsFrameTick(true)
+
+local function animProgress()
+  local t = math.min(1, math.max(0, (noctalia.nowMs() - animStart) / ANIM_MS))
+  local e = 1 - (1 - t) * (1 - t) * (1 - t)
+  if animClosing then
+    return 1 - e
+  end
+  return e
+end
+
+local function finishClose()
   noctalia.state.set("close_req", noctalia.nowMs()) -- the service owns the open/closed flag
   noctalia.layer.hide("screen")
 end
+
+local function closeDash()
+  if animClosing then
+    return
+  end
+  animClosing = true
+  animStart = noctalia.nowMs()
+  layer.setNeedsFrameTick(true)
+  update()
+end
+
+-- the service asks for an animated close (keybind / IPC)
+local lastAnimClose = noctalia.state.get("anim_close") or 0
+noctalia.state.watch("anim_close", function(v)
+  if v ~= nil and v ~= lastAnimClose then
+    lastAnimClose = v
+    closeDash()
+  end
+end)
 
 local function openUrl(url)
   if url ~= nil and url ~= "" then
@@ -1041,6 +1076,14 @@ local function outputGeometry()
 end
 
 function update()
+  local anim = animProgress()
+  if animClosing and anim <= 0 then
+    finishClose()
+    return
+  end
+  if anim >= 1 and not animClosing then
+    layer.setNeedsFrameTick(false)
+  end
   local g = outputGeometry()
   local scale = (g ~= nil and g.scale ~= nil and g.scale > 0) and g.scale or 1
   local logicalW = g ~= nil and (g.width / scale) or 1280
@@ -1087,6 +1130,7 @@ function update()
   end
 
   local main = ui.column({
+    opacity = anim,
     width = cardW,
     height = cardH,
     fill = "surface",
@@ -1104,12 +1148,19 @@ function update()
   })
 
   layer.render(ui.column({
-    fill = "scrim/0.55",
+    fill = string.format("scrim/%.2f", 0.55 * anim),
     flexGrow = 1,
     align = "center",
     justify = "center",
     onClick = closeDash,
-  }, { main }))
+  }, {
+    ui.box({ key = "slide", width = 1, height = math.floor(SLIDE * (1 - anim)), fill = "surface_container/0" }),
+    main,
+  }))
+end
+
+function onFrameTick(_deltaMs)
+  update()
 end
 
 update()
