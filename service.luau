@@ -306,7 +306,7 @@ local function refreshCommits()
   end)
 end
 
-local function refreshGithub()
+local function refreshGithubApi()
   local user = noctalia.getConfig("github_user")
   if user == nil or user == "" then
     return
@@ -349,6 +349,43 @@ local function refreshGithub()
   end)
   if not started then
     lastGithub = noctalia.nowMs() - 25 * 60000
+  end
+end
+
+local ghBusy = false
+
+local function refreshGithub()
+  local user = noctalia.getConfig("github_user")
+  if user == nil or user == "" or ghBusy then
+    return
+  end
+  local dir = noctalia.pluginDir()
+  if dir == nil or not noctalia.commandExists("python3") then
+    refreshGithubApi()
+    return
+  end
+  ghBusy = true
+  local started = noctalia.runAsync({ "python3", dir .. "/githubgraph.py", user }, function(result)
+    ghBusy = false
+    local data = nil
+    if result.exitCode == 0 then
+      data = noctalia.json.decode(result.stdout)
+    end
+    if data == nil or type(data.contributions) ~= "table" or #data.contributions == 0 then
+      refreshGithubApi()
+      return
+    end
+    publishGithub(data.contributions, user, data.total)
+    noctalia.state.set("gh_done", noctalia.nowMs())
+    local p = cachePath()
+    if p ~= nil then
+      noctalia.writeFile(p, noctalia.json.encode({ user = user, total = data.total, contributions = data.contributions }))
+    end
+    refreshCommits()
+  end)
+  if not started then
+    ghBusy = false
+    refreshGithubApi()
   end
 end
 

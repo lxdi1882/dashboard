@@ -9,6 +9,7 @@ local Todo = require("./lib/todo.luau")
 local tick = 0
 local lastGithub = 0
 local visible = false
+local closeAskedAt = 0
 local DAY_MS = 86400000
 
 ------------------------------------------------------------------ helpers
@@ -86,14 +87,21 @@ end
 -- budget per callback. The helper prints a tiny JSON summary.
 
 local iconCache = {}
+local iconBudget = 6 -- new icon lookups allowed per refresh, keeps the callback fast
 local function iconFor(app)
   if iconCache[app] == nil then
+    if iconBudget <= 0 then
+      return ""
+    end
+    iconBudget = iconBudget - 1
     iconCache[app] = noctalia.appIconPath(app, 24) or ""
   end
   return iconCache[app]
 end
 
 local screenBusy = false
+local screenLimit = 12
+local screenAgain = false
 
 local function refreshScreenTime()
   if screenBusy then
@@ -109,7 +117,7 @@ local function refreshScreenTime()
   end
   local file = stateHome() .. "/noctalia/screen_time.json"
   screenBusy = true
-  local started = noctalia.runAsync({ "python3", dir .. "/screentime.py", file }, function(result)
+  local started = noctalia.runAsync({ "python3", dir .. "/screentime.py", file, tostring(screenLimit) }, function(result)
     screenBusy = false
     if result.exitCode ~= 0 then
       noctalia.log("screentime.py failed: " .. tostring(result.stderr))
@@ -122,6 +130,7 @@ local function refreshScreenTime()
       return
     end
     if r.ok == true and r.apps ~= nil then
+      iconBudget = 6
       for _, a in ipairs(r.apps) do
         local iconName = (a.icon ~= nil and a.icon ~= "") and a.icon or a.id
         local path = iconFor(iconName)
@@ -132,6 +141,10 @@ local function refreshScreenTime()
       end
     end
     noctalia.state.set("screen", r)
+    if screenAgain then
+      screenAgain = false
+      refreshScreenTime()
+    end
   end)
   if not started then
     screenBusy = false
@@ -269,6 +282,30 @@ local function cachePath()
   return dir .. "/github.json"
 end
 
+local function refreshCommits()
+  local user = noctalia.getConfig("github_user")
+  if user == nil or user == "" then
+    return
+  end
+  local year = os.date("%Y")
+  local q = noctalia.string.urlEncode("author:" .. user .. " author-date:>=" .. year .. "-01-01")
+  noctalia.http({
+    url = "https://api.github.com/search/commits?per_page=1&q=" .. q,
+    method = "GET",
+    headers = { "Accept: application/vnd.github+json", "User-Agent: noctalia-dashboard" },
+    follow_redirects = true,
+  }, function(res)
+    if not res.ok or res.status ~= 200 then
+      return
+    end
+    local data = noctalia.json.decode(res.body)
+    if data == nil or type(data.total_count) ~= "number" then
+      return
+    end
+    noctalia.state.set("gh_commits", { ok = true, n = math.floor(data.total_count), year = year, user = user })
+  end)
+end
+
 local function refreshGithub()
   local user = noctalia.getConfig("github_user")
   if user == nil or user == "" then
@@ -284,6 +321,7 @@ local function refreshGithub()
     local current = noctalia.state.get("gh")
     local function fail(msg)
       lastGithub = noctalia.nowMs() - 25 * 60000 -- retry in ~5 minutes
+      noctalia.state.set("gh_done", noctalia.nowMs())
       if current == nil or current.ok ~= true then
         noctalia.state.set("gh", { ok = false, err = msg })
       end
@@ -302,6 +340,8 @@ local function refreshGithub()
       total = data.total.lastYear
     end
     publishGithub(data.contributions, user, total)
+    noctalia.state.set("gh_done", noctalia.nowMs())
+    refreshCommits()
     local p = cachePath()
     if p ~= nil then
       noctalia.writeFile(p, noctalia.json.encode({ user = user, total = total, contributions = data.contributions }))
@@ -344,6 +384,10 @@ end
 
 local function setVisible(v)
   visible = v
+  closeAskedAt = 0
+  if not v then
+    screenLimit = 12
+  end
   noctalia.state.set("visible", v)
   noctalia.log("dashboard: " .. (v and "show" or "hide"))
   if v then
@@ -354,14 +398,26 @@ local function setVisible(v)
   end
 end
 
+-- ask the layer to play its close animation; it answers with close_req when done
+local function requestClose()
+  closeAskedAt = noctalia.nowMs()
+  noctalia.state.set("anim_close", closeAskedAt)
+end
+
 function onIpc(event, payload)
   noctalia.log("dashboard ipc '" .. tostring(event) .. "' (visible=" .. tostring(visible) .. ")")
   if event == "toggle" then
-    setVisible(not visible)
+    if visible then
+      requestClose()
+    else
+      setVisible(true)
+    end
   elseif event == "show" then
     setVisible(true)
   elseif event == "hide" then
-    setVisible(false)
+    if visible then
+      requestClose()
+    end
   elseif event == "refresh" then
     refreshAll()
     lastGithub = 0
@@ -381,12 +437,30 @@ noctalia.state.watch("refresh_req", function(_)
 end)
 
 -- the layer edits the to-do file itself and asks for a re-read afterwards
+noctalia.state.watch("screen_more_req", function(_)
+  screenLimit = 40
+  if screenBusy then
+    screenAgain = true
+  else
+    refreshScreenTime()
+  end
+end)
+
+noctalia.state.watch("gh_req", function(_)
+  lastGithub = noctalia.nowMs()
+  refreshGithub()
+end)
+
 noctalia.state.watch("todo_req", function(_)
   refreshTodo()
 end)
 
 function update()
   tick = tick + 1
+  -- safety net: if the layer never answered the close request, hide anyway
+  if visible and closeAskedAt > 0 and noctalia.nowMs() - closeAskedAt > 2500 then
+    setVisible(false)
+  end
   refreshUptime()
   if tick % 3 == 1 then
     refreshTodo()
