@@ -848,6 +848,96 @@ end
 
 ------------------------------------------------------------------ system
 
+------------------------------------------------------------------ CPU governor (needs /usr/local/bin/set-governor + sudoers rule)
+
+local GOV_DIR = "/sys/devices/system/cpu/cpu0/cpufreq/"
+local govList = nil
+local govCurrent = nil
+local GOV_TIPS = {
+  performance = "Max clock speed, most power use",
+  powersave = "Lowest clock speed, saves power",
+  schedutil = "Scales with load (scheduler driven)",
+  ondemand = "Jumps up fast under load",
+  conservative = "Scales up and down gradually",
+  userspace = "Speed set by a program",
+}
+
+local function readGovernors()
+  local raw = noctalia.readFile(GOV_DIR .. "scaling_available_governors")
+  local list = {}
+  if raw ~= nil then
+    for g in string.gmatch(raw, "%S+") do
+      table.insert(list, g)
+    end
+  end
+  return list
+end
+
+local function readGovernor()
+  local raw = noctalia.readFile(GOV_DIR .. "scaling_governor")
+  if raw == nil then
+    return nil
+  end
+  return noctalia.string.trim(raw)
+end
+
+local function setGovernor(g)
+  govCurrent = g
+  noctalia.runAsync({ "sudo", "-n", "/usr/local/bin/set-governor", g }, function(result)
+    govCurrent = readGovernor()
+    if result.exitCode ~= 0 then
+      noctalia.notifyError("Dashboard", "Could not set governor: " .. tostring(result.stderr))
+    end
+    update()
+  end)
+  update()
+end
+
+local function governorRow()
+  if govList == nil then
+    govList = readGovernors()
+  end
+  if #govList == 0 then
+    return nil
+  end
+  govCurrent = readGovernor() or govCurrent
+  local lines = {}
+  for first = 1, #govList, 3 do
+    local pills = {}
+    for i = first, math.min(first + 2, #govList) do
+      local g = govList[i]
+      local active = (g == govCurrent)
+      table.insert(pills, ui.row({
+        key = "gov-" .. g,
+        flexGrow = 1,
+        justify = "center",
+        paddingV = 6,
+        radius = 9,
+        fill = active and "primary" or "surface_container_high",
+        tooltip = GOV_TIPS[g] or g,
+        onClick = function()
+          if not active then
+            setGovernor(g)
+          end
+        end,
+      }, {
+        ui.label({
+          text = string.upper(string.sub(g, 1, 1)) .. string.sub(g, 2),
+          fontSize = 12,
+          fontWeight = active and "bold" or "normal",
+          color = active and "on_primary" or "on_surface",
+          maxLines = 1,
+        }),
+      }))
+    end
+    table.insert(lines, ui.row({ gap = 6 }, pills))
+  end
+  return ui.column({ gap = 6 }, {
+    ui.label({ text = "CPU governor", fontSize = 11, fontWeight = "bold", color = "on_surface_variant" }),
+    ui.column({ gap = 6 }, lines),
+  })
+end
+
 local function systemCard()
   local stats = noctalia.systemStats()
   local rows = {}
@@ -875,6 +965,10 @@ local function systemCard()
     if #extra > 0 then
       table.insert(rows, ui.label({ text = table.concat(extra, "  ·  "), fontSize = 11, color = "on_surface_variant" }))
     end
+  end
+  local gov = governorRow()
+  if gov ~= nil then
+    table.insert(rows, gov)
   end
   return card({}, {
     sectionTitle("cpu", "System"),
