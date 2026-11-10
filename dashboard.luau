@@ -47,6 +47,8 @@ local ANIM_MS = 150
 local SLIDE = 28 -- spacer height; the card moves half of this
 local animStart = noctalia.nowMs()
 local animClosing = false
+local animStarted = false
+local closeCache = nil
 layer.setNeedsFrameTick(true)
 
 local function animProgress()
@@ -486,6 +488,8 @@ local RANGES = {
 }
 
 local CHART_H = 84
+local AVATAR = 68
+local HERO_FS = 28
 
 -- one single-colour bar; the peak is solid, everything else is dimmed
 local function bar(sec, maxSec, width, key, tip, isPeak, onClick)
@@ -675,7 +679,7 @@ local function screenCard(innerW)
     focusTotal, focusLabel = total, heroLabel
     table.insert(rows, ui.row({ align = "end", gap = 8 }, {
       ui.column({ gap = 0 }, {
-        ui.label({ text = fmtDur(total), fontSize = 28, fontWeight = "bold", color = "on_surface" }),
+        ui.label({ text = fmtDur(total), fontSize = HERO_FS, fontWeight = "bold", color = "on_surface" }),
         ui.label({ text = heroLabel, fontSize = 11, color = "on_surface_variant" }),
       }),
       ui.spacer({ flexGrow = 1 }),
@@ -840,7 +844,7 @@ local function screenCard(innerW)
       }),
     })
   end
-  return card({ flexGrow = 1 }, kids)
+  return card({ flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 }, kids)
 end
 
 
@@ -1139,16 +1143,16 @@ end
 
 local function avatarNode()
   if profile ~= nil and profile.avatar ~= nil and profile.avatar ~= "" then
-    return ui.image({ path = profile.avatar, width = 68, height = 68, radius = 34, fit = "cover" })
+    return ui.image({ path = profile.avatar, width = AVATAR, height = AVATAR, radius = math.floor(AVATAR / 2), fit = "cover" })
   end
   local initial = "?"
   if profile ~= nil and profile.name ~= nil and profile.name ~= "" then
     initial = string.upper(string.sub(profile.name, 1, 1))
   end
   return ui.column({
-    width = 68,
-    height = 68,
-    radius = 34,
+    width = AVATAR,
+    height = AVATAR,
+    radius = math.floor(AVATAR / 2),
     fill = "primary_container",
     align = "center",
     justify = "center",
@@ -1214,6 +1218,30 @@ function update()
   if anim >= 1 and not animClosing then
     layer.setNeedsFrameTick(false)
   end
+  if animClosing and closeCache ~= nil then
+    local c = closeCache
+    layer.render(ui.column({
+      fill = string.format("scrim/%.2f", 0.55 * anim),
+      flexGrow = 1,
+      align = "center",
+      justify = "center",
+      onClick = closeDash,
+    }, {
+      ui.column({
+        opacity = anim,
+        width = c.w,
+        height = c.h,
+        fill = "surface",
+        radius = 26,
+        padding = c.pad,
+        gap = c.gap,
+        border = "outline_variant",
+        borderWidth = 1,
+        onClick = function() end,
+      }, c.kids),
+    }))
+    return
+  end
   local g = outputGeometry()
   local scale = (g ~= nil and g.scale ~= nil and g.scale > 0) and g.scale or 1
   local logicalW = g ~= nil and (g.width / scale) or 1280
@@ -1228,7 +1256,14 @@ function update()
   local cardW = math.min(math.floor(logicalW * 0.96), math.max(760, math.min(sz.maxW, math.floor(logicalW * sz.w))))
   local cardH = math.min(math.floor(logicalH * 0.96), math.max(520, math.min(sz.maxH, math.floor(logicalH * sz.h))))
 
+  local short = cardH < 760
+  CHART_H = short and 40 or 84
+  AVATAR = short and 48 or 68
+  HERO_FS = short and 20 or 28
   local pad, colGap = 22, 14
+  if short then
+    pad, colGap = 14, 10
+  end
   local usable = cardW - pad * 2 - colGap
   local leftW = math.floor(usable * 3 / 5)
   local rightW = usable - leftW
@@ -1251,7 +1286,7 @@ function update()
   else
     local ggap = 3
     local ghInner = leftW - 28
-    local cell = math.max(4, math.min(13, math.floor(ghInner / weeks) - ggap))
+    local cell = math.max(4, math.min(short and 9 or 13, math.floor(ghInner / weeks) - ggap))
     left = ui.column({ gap = colGap, flexGrow = 3 }, {
       githubCard(ghInner, cell, ggap, leftW),
       ui.row({ gap = colGap, flexGrow = 1 }, { agendaCard(), screenCard(screenInnerW) }),
@@ -1259,6 +1294,15 @@ function update()
     right = ui.column({ gap = colGap, flexGrow = 2 }, { todoCard(todoTextW), systemCard() })
   end
 
+  local kids = {
+    header(),
+    ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
+    ui.row({ gap = colGap, flexGrow = 1 }, { left, right }),
+    footer(),
+  }
+  if anim >= 1 and not animClosing then
+    closeCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids }
+  end
   local main = ui.column({
     opacity = anim,
     width = cardW,
@@ -1270,12 +1314,7 @@ function update()
     border = "outline_variant",
     borderWidth = 1,
     onClick = function() end,
-  }, {
-    header(),
-    ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
-    ui.row({ gap = colGap, flexGrow = 1 }, { left, right }),
-    footer(),
-  })
+  }, kids)
 
   layer.render(ui.column({
     fill = string.format("scrim/%.2f", 0.55 * anim),
@@ -1284,12 +1323,17 @@ function update()
     justify = "center",
     onClick = closeDash,
   }, {
-    ui.box({ key = "slide", width = 1, height = math.floor(SLIDE * (1 - anim)), fill = "surface_container/0" }),
     main,
   }))
 end
 
 function onFrameTick(_deltaMs)
+  if not animStarted then
+    animStarted = true
+    if not animClosing then
+      animStart = noctalia.nowMs() -- start the fade after the first heavy draw, not at script load
+    end
+  end
   update()
 end
 
