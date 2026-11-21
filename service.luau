@@ -258,12 +258,9 @@ local function publishGithub(list, user, total)
   end
 
   local sum, recentWeek, recentMonth, activeDays = 0, 0, 0, 0
-  local weekdays = { 0, 0, 0, 0, 0, 0, 0 }
   for i, c in ipairs(list) do
     local count = c.count or 0
     sum = sum + count
-    local weekday = (pad + i - 1) % 7 + 1
-    weekdays[weekday] = weekdays[weekday] + count
     if i > #list - 30 then
       recentMonth = recentMonth + count
       if count > 0 then
@@ -287,7 +284,6 @@ local function publishGithub(list, user, total)
     recentWeek = recentWeek,
     recentMonth = recentMonth,
     activeDays = activeDays,
-    weekdays = weekdays,
   })
 end
 
@@ -359,6 +355,69 @@ local function refreshCommits(user)
     unavailable()
   end
 end
+
+local reposPending
+
+local function refreshGithubRepos(force)
+  local user = noctalia.getConfig("github_user")
+  if user == nil or user == "" or (reposPending ~= nil and reposPending.user == user) then
+    return
+  end
+  local cached = noctalia.state.get("gh_repos")
+  if not force and cached ~= nil and cached.user == user and noctalia.nowMs() - cached.checkedAt < (cached.ok and 1800000 or 300000) then
+    return
+  end
+  local request = { user = user }
+  reposPending = request
+
+  local function failed()
+    local result = cached and cached.user == user and table.clone(cached) or { user = user, ok = false }
+    result.checkedAt = noctalia.nowMs()
+    noctalia.state.set("gh_repos", result)
+  end
+
+  local url = "https://api.github.com/users/" .. noctalia.string.urlEncode(user) .. "/repos?type=owner&sort=pushed&direction=desc&per_page=3"
+  local started = noctalia.http({
+    url = url, method = "GET",
+    headers = { "Accept: application/vnd.github+json", "User-Agent: noctalia-dashboard" },
+    follow_redirects = true,
+  }, function(res)
+    if reposPending ~= request then
+      return
+    end
+    reposPending = nil
+    if noctalia.getConfig("github_user") ~= user then
+      return
+    end
+    local data = res.ok and res.status == 200 and noctalia.json.decode(res.body) or nil
+    if type(data) ~= "table" then
+      failed()
+      return
+    end
+    local items = {}
+    for _, repo in ipairs(data) do
+      if type(repo) == "table" and type(repo.name) == "string" and type(repo.html_url) == "string"
+          and string.match(repo.html_url, "^https://github%.com/[^/]+/[^/]+$") then
+        table.insert(items, {
+          name = repo.name,
+          description = type(repo.description) == "string" and repo.description or "",
+          language = type(repo.language) == "string" and repo.language or "",
+          pushed = type(repo.pushed_at) == "string" and (string.match(repo.pushed_at, "^%d%d%d%d%-%d%d%-%d%d") or "") or "",
+          url = repo.html_url,
+        })
+      end
+    end
+    noctalia.state.set("gh_repos", { ok = true, user = user, checkedAt = noctalia.nowMs(), items = items })
+  end)
+  if not started and reposPending == request then
+    reposPending = nil
+    failed()
+  end
+end
+
+noctalia.state.watch("gh_repos_req", function(request)
+  refreshGithubRepos(request ~= nil and request.force == true)
+end)
 
 local function refreshGithubApi()
   local user = noctalia.getConfig("github_user")

@@ -166,6 +166,19 @@ end
 
 local maximizedCard = nil
 local screenHover = nil
+local githubFeed = "commits"
+local ghRepos = noctalia.state.get("gh_repos")
+noctalia.state.watch("gh_repos", function(v) ghRepos = v end)
+
+local function maximize(id)
+  maximizedCard = id
+  screenHover = nil
+  if id == "github" then
+    githubFeed = "commits"
+    noctalia.state.set("gh_repos_req", { at = noctalia.nowMs(), force = false })
+  end
+  update()
+end
 
 local function sectionTitle(glyph, text, right, action, id)
   local children = {
@@ -188,12 +201,7 @@ local function sectionTitle(glyph, text, right, action, id)
       controlSize = "sm",
       tooltip = expanded and "Back to dashboard" or ("Maximize " .. text),
       onClick = function()
-        maximizedCard = expanded and nil or id
-        if expanded then
-          maximizedCard = nil
-        end
-        screenHover = nil
-        update()
+        maximize(not expanded and id or nil)
       end,
     }))
   end
@@ -329,6 +337,9 @@ local function ghRefreshButton()
       ghLoading = true
       ghLoadingSince = os.time()
       noctalia.state.set("gh_req", noctalia.nowMs())
+      if maximizedCard == "github" then
+        noctalia.state.set("gh_repos_req", { at = noctalia.nowMs(), force = true })
+      end
       update()
     end,
   })
@@ -390,25 +401,50 @@ local function githubWeeklyTrend()
   })
 end
 
-local function githubWeekdays(totals)
-  local names = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" }
-  local peak = math.max(1, table.unpack(totals))
+local function githubRepoRows(width, user)
+  local current = ghRepos and ghRepos.user == user and ghRepos or nil
   local rows = {}
-  for i, name in ipairs(names) do
-    local count = totals[i]
-    table.insert(rows, ui.row({ gap = 8, align = "center" }, {
-      ui.label({ text = name, minWidth = 32, fontSize = 12, color = "on_surface_variant" }),
-      ui.progress({
-        progress = count / peak, height = 7, radius = 3, flexGrow = 1,
-        fill = count == peak and "primary" or "primary/0.55",
-        track = "surface_container_high",
-      }),
-      ui.label({ text = tostring(count), minWidth = 32, fontSize = 12, textAlign = "right", color = "on_surface" }),
+  local items = current and current.items or {}
+  if #items == 0 then
+    local message = "Loading recent repositories…"
+    if user == "" then
+      message = "Set a GitHub username to see repositories."
+    elseif current ~= nil then
+      message = current.ok and "No public repositories found." or "Couldn’t load repositories. Try refreshing."
+    end
+    return { ui.label({ text = message, fontSize = 12, maxLines = 2, color = "on_surface_variant" }) }
+  end
+  for _, repo in ipairs(items) do
+    local meta = {}
+    if repo.language ~= "" then table.insert(meta, repo.language) end
+    if repo.pushed ~= "" then table.insert(meta, "Pushed " .. os.date("%b %d", dateToTime(repo.pushed))) end
+    local text = {
+      ui.label({ text = repo.name, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
+      ui.label({ text = table.concat(meta, " · "), maxWidth = math.max(80, math.floor(width * 0.42)), maxLines = 1,
+        fontSize = 11, color = "on_surface_variant" }),
+    }
+    local detail = { ui.row({ gap = 6, align = "center" }, text) }
+    if repo.description ~= "" then
+      table.insert(detail, ui.label({
+        text = repo.description, maxWidth = math.max(1, width - 66), maxLines = 1, fontSize = 11, color = "on_surface_variant",
+      }))
+    end
+    table.insert(rows, ui.row({
+      key = repo.url, gap = 7, paddingH = 7, paddingV = 4, radius = 8, align = "center",
+      fill = "surface_container_high", onClick = function() openUrl(repo.url) end,
+    }, {
+      ui.glyph({ name = "folder", size = 15, color = "primary" }),
+      ui.column({ gap = 2, flexGrow = 1 }, detail),
+      ui.glyph({ name = "external-link", size = 12, color = "on_surface_variant" }),
     }))
   end
+  return rows
+end
+
+local function githubReposSection(width, user)
   return ui.column({ gap = 5 }, {
-    sectionTitle("calendar-event", "Activity by weekday", "Past year"),
-    ui.column({ gap = 4 }, rows),
+    sectionTitle("folder", "Recently pushed repositories"),
+    ui.column({ gap = 4 }, githubRepoRows(width, user)),
   })
 end
 
@@ -535,15 +571,15 @@ local function githubCard(width, height, embedded)
   if embedded and height >= 423 and inner >= 500 then
     table.insert(contents, ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 4 }))
     table.insert(contents, githubWeeklyTrend())
-    if height >= 530 and gh.weekdays ~= nil then
+    if height >= 530 then
       table.insert(contents, ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 4 }))
-      table.insert(contents, githubWeekdays(gh.weekdays))
+      table.insert(contents, githubReposSection(inner, user))
     end
   end
   return card({ width = width, flexGrow = 1, padding = 12, gap = 6 }, contents)
 end
 
-local function githubCommitsCard(width, user)
+local function githubCommitsCard(width, user, tabbed)
   local current = ghCommits and ghCommits.user == user and ghCommits.year == os.date("%Y") and ghCommits or nil
   local items = current and current.items or {}
   local caption = current and current.ok and (tostring(current.n) .. " in " .. current.year) or nil
@@ -577,8 +613,24 @@ local function githubCommitsCard(width, user)
       ui.glyph({ name = "external-link", size = 13, color = "on_surface_variant" }),
     }))
   end
+  local heading = sectionTitle("git-commit", "Recent public commits", caption)
+  if tabbed then
+    local function tab(id, text)
+      return ui.button({
+        text = text, controlSize = "sm", variant = githubFeed == id and "primary" or "ghost",
+        onClick = function()
+          githubFeed = id
+          update()
+        end,
+      })
+    end
+    heading = ui.row({ gap = 6 }, { tab("commits", "Commits"), tab("repos", "Repositories") })
+    if githubFeed == "repos" then
+      rows = githubRepoRows(width, user)
+    end
+  end
   return card({ flexGrow = 1, padding = 10, gap = 6 }, {
-    sectionTitle("git-commit", "Recent public commits", caption),
+    heading,
     ui.scroll({ flexGrow = 1, gap = 5 }, rows),
   })
 end
@@ -593,14 +645,14 @@ local function githubDetails(width, height)
     local commitsWidth = inner - 10 - activityWidth
     body = ui.row({ flexGrow = 1, gap = 10 }, {
       ui.column({ width = activityWidth }, { githubCard(activityWidth, height - 54, true) }),
-      ui.column({ width = commitsWidth }, { githubCommitsCard(commitsWidth, user) }),
+      ui.column({ width = commitsWidth }, { githubCommitsCard(commitsWidth, user, height - 54 < 530) }),
     })
   else
     local activityHeight = height >= 330 and math.clamp(math.floor((height - 54) * 0.53), 198, 245)
       or math.floor(math.max(0, height - 54) * 0.45)
     body = ui.column({ flexGrow = 1, gap = 8 }, {
       ui.column({ height = activityHeight, clip = true }, { githubCard(inner, activityHeight, true) }),
-      githubCommitsCard(inner, user),
+      githubCommitsCard(inner, user, true),
     })
   end
   return card({ width = width, flexGrow = 1, padding = 12, gap = 8 }, {
@@ -1736,9 +1788,7 @@ local function launcher(placed, width)
         key = "launch-" .. id, glyph = info.icon, text = width >= 560 and info.title or nil,
         variant = "ghost", controlSize = "sm",
         onClick = function()
-          maximizedCard = id
-          screenHover = nil
-          update()
+          maximize(id)
         end,
       }))
     end
