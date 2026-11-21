@@ -8,6 +8,7 @@ dates, then classifies each number by its key path:
   * a key "0".."23" (or a 24-long numeric list) is an hour bucket
   * the last other string key (not a date / generic word) is the app name
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -177,30 +178,38 @@ def desktop_icons():
 def load_sites(directory, dates):
     """Read aggregate domain durations exported by the optional Brave companion."""
     days = {day: {} for day, _ in dates}
-    loaded = False
-    for path in Path(directory).glob("*.json"):
+    profiles = []
+    directory = Path(directory)
+    for path in directory.glob("*.json"):
         try:
             profile = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         if not isinstance(profile, dict):
             continue
-        loaded = True
+        profiles.append(path.stem)
         for day, by_domain in profile.items():
             if day not in days or not isinstance(by_domain, dict):
                 continue
             for domain, duration in by_domain.items():
                 if type(duration) is int and duration > 0 and re.fullmatch(r"[a-z0-9.-]{1,253}", domain):
                     days[day][domain] = days[day].get(domain, 0) + duration
-    if not loaded:
+    if not profiles:
         return None
 
+    icons = {}
+
     def ranked(values):
-        return [
-            {"domain": domain, "sec": ms // 1000}
-            for domain, ms in sorted(values.items(), key=lambda item: (-item[1], item[0]))[:10]
-            if ms >= 1000
-        ]
+        rows = []
+        for domain, ms in sorted(values.items(), key=lambda item: (-item[1], item[0]))[:10]:
+            if ms < 1000:
+                continue
+            if domain not in icons:
+                name = hashlib.sha256(domain.encode("ascii")).hexdigest() + ".png"
+                paths = (directory / "icons" / profile / name for profile in profiles)
+                icons[domain] = next((str(path) for path in paths if path.is_file()), "")
+            rows.append({"domain": domain, "sec": ms // 1000, "icon": icons[domain]})
+        return rows
 
     def totals(n):
         result = {}

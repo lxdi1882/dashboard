@@ -1344,7 +1344,9 @@ local function screenSites()
   for _, item in ipairs(items) do
     table.insert(rows, ui.row({ key = "site-" .. item.domain, gap = 8, paddingH = 7, paddingV = 5,
       align = "center", radius = 7, fill = "surface_container_high" }, {
-      ui.glyph({ name = "world", size = 14, color = "primary" }),
+      item.icon ~= nil and item.icon ~= ""
+        and ui.image({ path = item.icon, width = 16, height = 16, fit = "contain" })
+        or ui.glyph({ name = "world", size = 16, color = "primary" }),
       ui.label({ text = item.domain, fontSize = 12, maxLines = 1, flexGrow = 1, color = "on_surface" }),
       ui.label({ text = fmtDur(item.sec), fontSize = 12, color = "on_surface_variant" }),
     }))

@@ -12,7 +12,8 @@
     "storage"
   ],
   "optional_permissions": [
-    "tabs"
+    "tabs",
+    "favicon"
   ],
   "background": {
     "service_worker": "worker.js"

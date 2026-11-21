@@ -2,6 +2,7 @@ const host = "io.github.lxdi1882.dashboard_sites";
 const heartbeat = "dashboard-site-time";
 const maxSample = 45_000;
 const exportInterval = 30_000;
+const iconRefresh = 7 * 24 * 60 * 60 * 1000;
 let pending = Promise.resolve();
 let nextExport = 0;
 
@@ -32,6 +33,9 @@ function trim(state, now) {
   const cutoff = localDate(oldest.getTime());
   for (const day of Object.keys(state.days)) {
     if (day < cutoff) delete state.days[day];
+  }
+  for (const [domain, recheck] of Object.entries(state.icons ?? {})) {
+    if (recheck <= now) delete state.icons[domain];
   }
 }
 
@@ -69,44 +73,62 @@ function domainOf(value) {
   return null;
 }
 
-async function foregroundDomain() {
+async function foregroundPage() {
   if ((await chrome.idle.queryState(60)) === "locked") return null;
   const window = await chrome.windows.getLastFocused();
   if (!window?.focused || window.incognito) return null;
   const [tab] = await chrome.tabs.query({ active: true, windowId: window.id });
-  return tab?.incognito ? null : domainOf(tab?.url);
+  const domain = tab?.incognito ? null : domainOf(tab?.url);
+  return domain ? { domain, url: tab.url, hasIcon: Boolean(tab.favIconUrl) } : null;
 }
 
-async function exportTotals(state, force = false) {
-  const now = Date.now();
-  if (!force && now < nextExport) return;
-  nextExport = now + exportInterval;
+async function cachedIcon(page) {
   try {
-    const result = await chrome.runtime.sendNativeMessage(host, {
-      profile: state.profile,
-      days: state.days,
-    });
-    state.connected = result?.ok === true;
+    const url = new URL(chrome.runtime.getURL("/_favicon/"));
+    url.searchParams.set("pageUrl", page.url);
+    url.searchParams.set("size", "32");
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length === 0 || bytes.length > 32_768) return null;
+    return { domain: page.domain, png: btoa(String.fromCharCode(...bytes)) };
   } catch {
-    state.connected = false;
+    return null;
   }
 }
 
-async function updateSample(reset = false, stop = false) {
+async function exportTotals(state, { force = false, page = null, clear = false } = {}) {
+  const now = Date.now();
+  if (!force && now < nextExport) return false;
+  nextExport = now + exportInterval;
+  const message = { profile: state.profile, days: state.days, clearIcons: clear };
+  try {
+    if (page?.hasIcon && !(Object.hasOwn(state.icons ?? {}, page.domain))
+        && (await chrome.permissions.contains({ permissions: ["favicon"] }))) {
+      const icon = await cachedIcon(page);
+      if (icon) message.icon = icon;
+      (state.icons ??= {})[page.domain] = now + (icon ? iconRefresh : 300_000);
+    }
+    const result = await chrome.runtime.sendNativeMessage(host, message);
+    state.connected = result?.ok === true;
+    if (!state.connected && message.icon) delete state.icons[page.domain];
+  } catch {
+    state.connected = false;
+    if (message.icon) delete state.icons[page.domain];
+  }
+  return true;
+}
+
+async function updateSample(reset = false, stop = false, forceExport = false) {
   const state = await load();
   if (!state.enabled) return;
   const now = Date.now();
   if (!reset) finishSample(state, now);
-  state.active = null;
-  if (!stop) {
-    const domain = await foregroundDomain().catch(() => null);
-    if (domain) state.active = { domain, since: now };
-  }
+  const page = stop ? null : await foregroundPage().catch(() => null);
+  state.active = page ? { domain: page.domain, since: now } : null;
   trim(state, now);
   await save(state);
-  const connected = state.connected;
-  await exportTotals(state, reset);
-  if (state.connected !== connected) await save(state);
+  if (await exportTotals(state, { force: reset || forceExport, page })) await save(state);
 }
 
 async function ensureHeartbeat() {
@@ -121,12 +143,12 @@ async function status(action) {
     if (!(await chrome.permissions.contains({ permissions: ["tabs"] }))) {
       return { enabled: false, connected: false };
     }
-    await exportTotals(state, true);
+    await exportTotals(state, { force: true });
     if (state.connected) {
       state.enabled = true;
       await ensureHeartbeat();
-      const domain = await foregroundDomain().catch(() => null);
-      state.active = domain ? { domain, since: Date.now() } : null;
+      const page = await foregroundPage().catch(() => null);
+      state.active = page ? { domain: page.domain, since: Date.now() } : null;
     }
     await save(state);
   } else if (action === "pause" || action === "revoke") {
@@ -134,14 +156,15 @@ async function status(action) {
     state.enabled = false;
     await save(state);
     await chrome.alarms.clear(heartbeat);
-    await exportTotals(state, true);
+    await exportTotals(state, { force: true });
     await save(state);
   } else if (action === "clear") {
     const now = Date.now();
     state.days = {};
+    state.icons = {};
     if (state.active) state.active.since = now;
     await save(state);
-    await exportTotals(state, true);
+    await exportTotals(state, { force: true, clear: true });
     await save(state);
   }
   return { enabled: state.enabled, connected: state.connected };
@@ -175,6 +198,9 @@ chrome.tabs.onUpdated.addListener((_, change, tab) => {
 });
 chrome.idle.onStateChanged.addListener(state => {
   schedule(() => updateSample(false, state === "locked"));
+});
+chrome.permissions.onAdded.addListener(added => {
+  if (added.permissions?.includes("favicon")) schedule(() => updateSample(false, false, true));
 });
 chrome.permissions.onRemoved.addListener(removed => {
   if (removed.permissions?.includes("tabs")) schedule(() => status("revoke"));

@@ -23,16 +23,48 @@ def xdg_dir(variable, fallback):
     return Path(os.environ.get(variable) or Path.home() / fallback)
 
 
-def atomic_json(path, data):
+def atomic_write(path, data):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as temp:
+    with NamedTemporaryFile(dir=path.parent, delete=False) as temp:
         temporary_path = Path(temp.name)
         try:
-            json.dump(data, temp, separators=(",", ":"))
+            temp.write(data)
             temp.close()
             temporary_path.replace(path)
         finally:
             temporary_path.unlink(missing_ok=True)
+
+
+def atomic_json(path, data):
+    atomic_write(path, json.dumps(data, separators=(",", ":")).encode("utf-8"))
+
+
+def valid_domain(domain):
+    return isinstance(domain, str) and len(domain) <= 253 and all(
+        LABEL.fullmatch(label) for label in domain.split(".")
+    )
+
+
+def save_icon(directory, icon):
+    if not isinstance(icon, dict):
+        return
+    domain, encoded = icon.get("domain"), icon.get("png")
+    if not valid_domain(domain) or not isinstance(encoded, str) or len(encoded) > 44_000:
+        return
+    try:
+        png = base64.b64decode(encoded, validate=True)
+    except ValueError:
+        return
+    if len(png) < 33 or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
+        return
+    width, height = struct.unpack(">II", png[16:24])
+    if not (1 <= width <= 64 and 1 <= height <= 64):
+        return
+    name = hashlib.sha256(domain.encode("ascii")).hexdigest() + ".png"
+    atomic_write(directory / name, png)
+    files = sorted(directory.glob("*.png"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for stale in files[128:]:
+        stale.unlink(missing_ok=True)
 
 
 def save_totals(message):
@@ -51,8 +83,7 @@ def save_totals(message):
         clean = {}
         for hostname, ms in sites.items():
             if (
-                len(hostname) <= 253
-                and all(LABEL.fullmatch(label) for label in hostname.split("."))
+                valid_domain(hostname)
                 and type(ms) is int
                 and 0 < ms <= 86_400_000
             ):
@@ -61,6 +92,15 @@ def save_totals(message):
 
     directory = xdg_dir("XDG_STATE_HOME", ".local/state") / "lat-dashboard/site-usage"
     atomic_json(directory / f"{profile}.json", totals)
+    icons = directory / "icons" / profile
+    if message.get("clearIcons") is True:
+        for icon in icons.glob("*.png"):
+            icon.unlink(missing_ok=True)
+    elif "icon" in message:
+        try:
+            save_icon(icons, message["icon"])
+        except OSError:
+            pass
     return True
 
 

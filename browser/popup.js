@@ -1,5 +1,6 @@
 const toggle = document.querySelector("#toggle");
 const clear = document.querySelector("#clear");
+const icons = document.querySelector("#icons");
 const statusLine = document.querySelector("#status");
 let enabled = false;
 
@@ -10,6 +11,7 @@ async function run(action) {
     if (result?.error || !result) throw new Error();
     enabled = result.enabled;
     toggle.textContent = enabled ? "Pause tracking" : "Start tracking";
+    icons.hidden = await chrome.permissions.contains({ permissions: ["favicon"] });
     if (action !== "status" && !result.connected) {
       statusLine.textContent = "Dashboard bridge unavailable. Install it using the project README.";
     } else if (enabled) {
@@ -35,6 +37,15 @@ toggle.addEventListener("click", async () => {
     } catch {
       statusLine.textContent = "Could not request tab access.";
     }
+  }
+});
+
+icons.addEventListener("click", async () => {
+  try {
+    const allowed = await chrome.permissions.request({ permissions: ["favicon"] });
+    if (allowed) await run("status");
+  } catch {
+    statusLine.textContent = "Could not grant access to cached site icons.";
   }
 });
 
