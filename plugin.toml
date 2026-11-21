@@ -71,6 +71,15 @@ id    = "data"
 entry = "service.luau"
 
 # The full-screen overlay itself.
+[[panel]]
+id        = "layout"
+entry     = "layout-panel.luau"
+width     = 590
+height    = 390
+placement = "floating"
+position  = "center"
+layer     = "overlay"
+
 [[layer]]
 id             = "screen"
 entry          = "dashboard.luau"

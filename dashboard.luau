@@ -12,9 +12,10 @@ local function compactGraph()
 end
 
 local savedLayout = Layout.load(compactGraph())
-local draftLayout = nil
-local draftUsesDefault = false
-local layoutSaveFailed = false
+noctalia.state.watch("layout_saved", function()
+  savedLayout = Layout.load(compactGraph())
+  update()
+end)
 
 ------------------------------------------------------------------ shared state
 
@@ -1362,11 +1363,7 @@ local function footer()
       variant = "ghost",
       controlSize = "sm",
       onClick = function()
-        draftUsesDefault = savedLayout == nil
-        draftLayout = savedLayout and Layout.copy(savedLayout, compactGraph()) or Layout.defaults(compactGraph())
-        layoutSaveFailed = false
-        screenHover = nil
-        update()
+        noctalia.togglePanel("lat/dashboard:layout")
       end,
     })
   end
@@ -1385,100 +1382,6 @@ local function footer()
   end
   table.insert(actions, ui.button({ text = "Refresh", glyph = "refresh", variant = "ghost", controlSize = "sm", onClick = refresh }))
   return ui.row({ gap = 8, align = "center" }, actions)
-end
-
-local CARD_NAMES = { github = "GitHub", calendar = "Calendar", screen = "Screen time", todo = "To do", system = "System" }
-
-local function layoutAction(id, text, glyph, enabled, onClick)
-  return ui.button({
-    key = id, text = text, glyph = glyph, enabled = enabled,
-    variant = "ghost", controlSize = "sm", onClick = onClick,
-  })
-end
-
-local function layoutEditorColumn(side)
-  local cards = draftLayout[side]
-  local other = side == "left" and "right" or "left"
-  local rows = {
-    ui.label({ text = side == "left" and "Left column" or "Right column", fontSize = 15, fontWeight = "bold" }),
-  }
-  for i, id in ipairs(cards) do
-    local hidden = draftLayout.hidden[id] == true
-    local function change(action)
-      action()
-      draftUsesDefault = false
-      layoutSaveFailed = false
-      update()
-    end
-    table.insert(rows, ui.row({ key = "layout-row-" .. id, gap = 6, align = "center" }, {
-      ui.label({ text = CARD_NAMES[id], flexGrow = 1, color = hidden and "on_surface_variant" or "on_surface", maxLines = 1 }),
-      layoutAction("up-" .. id, nil, "arrow-up", i > 1, function()
-        if i > 1 then
-          change(function() cards[i - 1], cards[i] = cards[i], cards[i - 1] end)
-        end
-      end),
-      layoutAction("down-" .. id, nil, "arrow-down", i < #cards, function()
-        if i < #cards then
-          change(function() cards[i + 1], cards[i] = cards[i], cards[i + 1] end)
-        end
-      end),
-      layoutAction("move-" .. id, nil, side == "left" and "arrow-right" or "arrow-left", true, function()
-        change(function()
-          table.insert(draftLayout[other], table.remove(cards, i))
-        end)
-      end),
-      layoutAction("hide-" .. id, hidden and "Show" or "Hide", nil, true, function()
-        change(function()
-          draftLayout.hidden[id] = not hidden or nil
-        end)
-      end),
-    }))
-  end
-  if #cards == 0 then
-    table.insert(rows, ui.label({ text = "No cards in this column", fontSize = 12, color = "on_surface_variant" }))
-  end
-  return card({ flexGrow = 1 }, rows)
-end
-
-local function layoutEditor(gap)
-  local actions = {
-    layoutAction("reset-layout", "Reset to default", nil, true, function()
-      draftLayout = Layout.defaults(compactGraph())
-      draftUsesDefault = true
-      layoutSaveFailed = false
-      update()
-    end),
-    ui.spacer({ flexGrow = 1 }),
-    layoutAction("cancel-layout", "Cancel", nil, true, function()
-      draftLayout = nil
-      update()
-    end),
-    ui.button({
-      key = "save-layout", text = "Save", variant = "primary", controlSize = "sm",
-      onClick = function()
-        local nextLayout = nil
-        if not draftUsesDefault then
-          nextLayout = draftLayout
-        end
-        if Layout.save(nextLayout) then
-          savedLayout = nextLayout
-          draftLayout = nil
-        else
-          layoutSaveFailed = true
-        end
-        update()
-      end,
-    }),
-  }
-  local kids = {
-    sectionTitle("layout-dashboard", "Edit layout"),
-    ui.row({ gap = gap, flexGrow = 1 }, { layoutEditorColumn("left"), layoutEditorColumn("right") }),
-  }
-  if layoutSaveFailed then
-    table.insert(kids, ui.label({ text = "Could not save the layout. Try again or cancel.", color = "error", fontSize = 12 }))
-  end
-  table.insert(kids, ui.row({ gap = 8, align = "center" }, actions))
-  return card({ flexGrow = 1 }, kids)
 end
 
 ------------------------------------------------------------------ layout
@@ -1697,9 +1600,7 @@ function update()
   local chartWidth = math.floor((leftW - colGap) * 0.53)
 
   local body
-  if draftLayout ~= nil then
-    body = layoutEditor(colGap)
-  elseif maximizedCard == "screen" then
+  if maximizedCard == "screen" then
     CHART_H = math.clamp(math.floor(height * 0.25), 48, 124)
     HERO_FS = short and 26 or 32
     body = cachedScreenCard(width - 32)
@@ -1725,10 +1626,8 @@ function update()
     header(),
     ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
     body,
+    footer(),
   }
-  if draftLayout == nil then
-    table.insert(kids, footer())
-  end
   layoutCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids }
   renderLayout(animProgress())
 end
