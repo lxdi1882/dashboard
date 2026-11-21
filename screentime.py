@@ -29,17 +29,6 @@ HOUR_RE = re.compile(r"^\d{1,2}$")
 BRAVE_APP = re.compile(r"(?:^|[.])brave(?:$|[-.])")
 SITE_PREFIX = "site:"
 BRAVE_REMAINDER = "browser:brave-other"
-BROWSER_APP = re.compile(
-    r"(?:^|[.])(?:brave|chromium|chrome|firefox|librewolf|waterfox|floorp|vivaldi|opera|"
-    r"microsoft-edge|zen-browser|qutebrowser|epiphany|falkon|thorium|ungoogled-chromium)"
-    r"(?:$|[-.])"
-)
-
-
-def is_browser(app):
-    return BROWSER_APP.search(app.lower()) is not None
-
-
 def classify(k):
     if isinstance(k, str):
         if k.startswith("H:"):
@@ -232,30 +221,9 @@ def load_sites(directory, dates):
             "name": site_label(domain),
         }
 
-    def ranked(values):
-        rows = []
-        for domain, ms in sorted(values.items(), key=lambda item: (-item[1], item[0]))[:10]:
-            if ms < 1000:
-                continue
-            rows.append({"domain": domain, "name": site_label(domain), "sec": ms // 1000, "icon": icon_for(domain)})
-        return rows
-
-    ranges, range_totals = {}, {}
-    for key, length in (("today", 1), ("7d", 7), ("14d", 14)):
-        totals = {}
-        for day, _ in dates[-length:]:
-            for domain, ms in days[day].items():
-                totals[domain] = totals.get(domain, 0) + ms
-        ranges[key] = ranked(totals)
-        range_totals[key] = sum(totals.values()) // 1000
-
-    # Include exact daily totals for every listed site, even on days it ranked below the top ten.
-    domains = sorted({row["domain"] for listing in ranges.values() for row in listing})
     return {
-        "ranges": ranges,
-        "rangeTotals": range_totals,
         "calendar": [{"date": day, "recorded": bool(days[day])} for day, _ in dates],
-        "trends": {domain: trend_for(domain) for domain in domains},
+        "trends": {},
     }, days, trend_for
 
 
@@ -404,24 +372,10 @@ def main():
 
     highlights = []
     for length in (1, 7, 14):
-        by, raw = {}, {}
-        for day, _ in dates[-length:]:
-            for item, seconds in daily[day].items():
-                by[item] = by.get(item, 0) + seconds
-            for app, seconds in raw_days[day].items():
-                raw[app] = raw.get(app, 0) + seconds
-        leader = min(by, key=lambda item: (-by[item], item)) if by else ""
-        raw_leader = min(raw, key=lambda app: (-raw[app], app)) if raw else ""
-        other = min((app for app in raw if not is_browser(app)), key=lambda app: (-raw[app], app), default="")
-        info = metadata(leader) if leader else {"name": ""}
+        by = sum_usage(daily[day] for day, _ in dates[-length:])
         highlights.append({
             "total": sum(day["sec"] for day in days[-length:]),
-            "top": info["name"],
-            "topDomain": info.get("domain", ""),
-            "topSec": by.get(leader, 0),
-            "browserSec": sum(seconds for app, seconds in raw.items() if is_browser(app)),
-            "outside": other if raw_leader and is_browser(raw_leader) else "",
-            "outsideSec": raw.get(other, 0),
+            "items": [{**metadata(item), "sec": by[item]} for item in rank_usage(by)[:3]],
         })
 
     print(json.dumps({

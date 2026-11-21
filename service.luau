@@ -133,7 +133,11 @@ local function refreshScreenTime()
     end
     if r.ok == true and r.apps ~= nil then
       iconBudget = 6
-      for _, apps in ipairs({ r.apps, r.hourApps or {}, r.usageApps or {} }) do
+      local groups = { r.apps, r.hourApps or {}, r.usageApps or {} }
+      for _, period in ipairs(r.highlights or {}) do
+        table.insert(groups, period.items or {})
+      end
+      for _, apps in ipairs(groups) do
         for _, a in pairs(apps) do
           if a.domain == nil then
             local iconName = (a.icon ~= nil and a.icon ~= "") and a.icon or a.id
