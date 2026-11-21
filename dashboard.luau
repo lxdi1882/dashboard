@@ -166,11 +166,10 @@ local screenHover = nil
 local function sectionTitle(glyph, text, right, action, id)
   local children = {
     ui.glyph({ name = glyph, size = 18, color = "primary" }),
-    ui.label({ text = text, fontSize = 15, fontWeight = "bold", color = "on_surface" }),
-    ui.spacer({ flexGrow = 1 }),
+    ui.label({ text = text, fontSize = 15, fontWeight = "bold", color = "on_surface", maxLines = 1, flexGrow = 1 }),
   }
   if right ~= nil then
-    table.insert(children, ui.label({ text = right, fontSize = 12, color = "on_surface_variant" }))
+    table.insert(children, ui.label({ text = right, fontSize = 12, color = "on_surface_variant", maxLines = 1, maxWidth = 140 }))
   end
   if action ~= nil then
     table.insert(children, action)
@@ -359,19 +358,25 @@ local function githubCard(inner, cell, gap, cardWidth)
     if ghCommits ~= nil and ghCommits.ok == true and ghCommits.user == noctalia.getConfig("github_user") then
       table.insert(statsRow, stat(tostring(ghCommits.n), "commits · " .. ghCommits.year))
     end
-    table.insert(statsRow, ui.spacer({ flexGrow = 1 }))
-    if inner >= 440 then
+    local stats = ui.row({ gap = inner >= 400 and 18 or 8, align = "end" }, statsRow)
+    if inner >= 480 then
       local legend = { ui.label({ text = "Less", fontSize = 10, color = "on_surface_variant" }) }
       for l = 0, 4 do
         table.insert(legend, ui.box({ width = 10, height = 10, radius = 3, fill = levelColor(l) }))
       end
       table.insert(legend, ui.label({ text = "More", fontSize = 10, color = "on_surface_variant" }))
-      table.insert(statsRow, ui.row({ gap = 3, align = "center" }, legend))
+      stats = ui.column({ gap = 6 }, { stats, ui.row({ gap = 3, align = "center" }, legend) })
+    elseif inner < 380 then
+      local first, second = {}, {}
+      for i, item in ipairs(statsRow) do
+        table.insert(i <= 3 and first or second, item)
+      end
+      stats = ui.column({ gap = 6 }, {
+        ui.row({ gap = 8, align = "end" }, first),
+        ui.row({ gap = 8, align = "end" }, second),
+      })
     end
-    body = ui.column({ gap = 10 }, {
-      gridCache,
-      ui.row({ gap = 18, align = "end" }, statsRow),
-    })
+    body = ui.column({ gap = 8 }, { gridCache, stats })
   end
   local right = nil
   if hoverDay ~= nil then
@@ -379,9 +384,15 @@ local function githubCard(inner, cell, gap, cardWidth)
   elseif gh ~= nil and gh.ok == true then
     right = gh.total .. " contributions · past year"
   end
+  local title = "GitHub"
+  if inner >= 440 then
+    title = title .. " · " .. tostring(noctalia.getConfig("github_user"))
+  end
+  local detail = right and ui.label({ text = right, fontSize = 12, color = "on_surface_variant", maxLines = 1 }) or nil
   return card({ width = cardWidth, padding = 14, gap = 8, flexGrow = maximizedCard == "github" and 1 or nil }, {
-    sectionTitle("brand-github", "GitHub · " .. tostring(noctalia.getConfig("github_user")), right, ghRefreshButton(), "github"),
-    body,
+    sectionTitle("brand-github", title, nil, ghRefreshButton(), "github"),
+    detail or body,
+    detail and body or nil,
   })
 end
 
@@ -831,8 +842,8 @@ local function screenCard(innerW)
 
     -- 4. chart + aligned axis
     if #bars > 0 then
-      local gap = (#bars > 14) and 3 or 4
-      local width = math.max(3, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
+      local gap = innerW < 240 and 2 or ((#bars > 14) and 3 or 4)
+      local width = math.max(1, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
       local cols = {}
       for i, b in ipairs(bars) do
         local function selectBar()
@@ -1551,10 +1562,15 @@ local function cachedTodoCard(textWidth)
   return todoCache.node
 end
 
-local function defaultLayout(leftW, rightW, todoTextW, screenInnerW, short, colGap)
+local function wideLayout(leftW, rightW, chartWidth, short, colGap)
   local agendaNode = cachedAgendaCard()
-  local screenNode = cachedScreenCard(screenInnerW)
-  local todoNode = cachedTodoCard(todoTextW)
+  local screenNode = cachedScreenCard(chartWidth - 32)
+  local todoNode = cachedTodoCard(math.max(48, rightW - 146))
+  local calendarWidth = leftW - chartWidth - colGap
+  local lower = ui.row({ gap = colGap, flexGrow = 1 }, {
+    ui.column({ width = calendarWidth }, { agendaNode }),
+    ui.column({ width = chartWidth }, { screenNode }),
+  })
 
   -- GitHub graph. "large" (default): card spans the column with big squares, System sits under To-do.
   -- "compact": card hugs a small graph and System sits beside it.
@@ -1562,32 +1578,34 @@ local function defaultLayout(leftW, rightW, todoTextW, screenInnerW, short, colG
   local left, right
   if noctalia.getConfig("graph_size") == "compact" then
     local ggap = 2
-    local cell = math.max(4, math.min(8, math.floor((leftW - 32 - 200 - colGap) / weeks) - ggap))
-    local ghInner = weeks * (cell + ggap) - ggap
-    left = ui.column({ gap = colGap, flexGrow = 3 }, {
-      ui.row({ gap = colGap, align = "stretch" }, { githubCard(ghInner, cell, ggap, ghInner + 28), systemCard() }),
-      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
+    local githubWidth = math.floor((leftW - colGap) * 0.64)
+    local systemWidth = leftW - githubWidth - colGap
+    local ghInner = githubWidth - 28
+    local cell = math.max(1, math.min(8, math.floor((ghInner + ggap) / weeks) - ggap))
+    left = ui.column({ gap = colGap, width = leftW }, {
+      ui.row({ gap = colGap }, {
+        githubCard(ghInner, cell, ggap, githubWidth),
+        ui.column({ width = systemWidth }, { systemCard() }),
+      }),
+      lower,
     })
-    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode })
+    right = ui.column({ gap = colGap, width = rightW }, { todoNode })
   else
     local ggap = 3
     local ghInner = leftW - 28
-    local cell = math.max(4, math.min(short and 9 or 13, math.floor(ghInner / weeks) - ggap))
-    left = ui.column({ gap = colGap, flexGrow = 3 }, {
-      githubCard(ghInner, cell, ggap, leftW),
-      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
-    })
-    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode, systemCard() })
+    local cell = math.max(1, math.min(short and 9 or 13, math.floor((ghInner + ggap) / weeks) - ggap))
+    left = ui.column({ gap = colGap, width = leftW }, { githubCard(ghInner, cell, ggap, leftW), lower })
+    right = ui.column({ gap = colGap, width = rightW }, { todoNode, systemCard() })
   end
   return ui.row({ gap = colGap, flexGrow = 1 }, { left, right })
 end
 
-local function customCard(id, width, availableHeight)
+local function stackedCard(id, width, availableHeight)
   if id == "github" then
     local inner = width - 28
     local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
     local gap = inner < 390 and 1 or 2
-    local cell = math.max(2, math.min(13, math.floor((inner + gap) / weeks) - gap))
+    local cell = math.max(1, math.min(13, math.floor((inner + gap) / weeks) - gap))
     return githubCard(inner, cell, gap, width)
   elseif id == "system" then
     return systemCard()
@@ -1595,22 +1613,22 @@ local function customCard(id, width, availableHeight)
   local node, height
   if id == "calendar" then
     node = cachedAgendaCard()
-    height = 280
+    height = 220
   elseif id == "screen" then
     node = cachedScreenCard(width - 32)
-    height = CHART_H + 300
+    height = CHART_H + 260
   else
-    node = cachedTodoCard(width - 146)
-    height = 300
+    node = cachedTodoCard(math.max(48, width - 146))
+    height = 220
   end
   return ui.column({ height = math.max(height, availableHeight) }, { node })
 end
 
-local function customLayout(width, height, gap)
+local function stackedLayout(layout, width, height, gap)
   local function visibleIds(side)
     local ids = {}
-    for _, id in ipairs(savedLayout[side]) do
-      if not savedLayout.hidden[id] then
+    for _, id in ipairs(layout[side]) do
+      if not layout.hidden[id] then
         table.insert(ids, id)
       end
     end
@@ -1622,16 +1640,29 @@ local function customLayout(width, height, gap)
       ui.label({ text = "All cards are hidden. Use Edit layout to show them.", color = "on_surface_variant", fontSize = 13 }),
     })
   end
-  local columnWidth = (#left == 0 or #right == 0) and width or math.floor((width - gap) / 2)
-  local cols = {}
-  for _, ids in ipairs({ left, right }) do
-    if #ids > 0 then
-      local nodes = {}
-      for _, id in ipairs(ids) do
-        table.insert(nodes, customCard(id, columnWidth, #ids == 1 and height or 0))
-      end
-      table.insert(cols, ui.scroll({ flexGrow = 1, width = columnWidth, gap = gap }, nodes))
+  if width < 620 then
+    for _, id in ipairs(right) do
+      table.insert(left, id)
     end
+    right = {}
+  end
+  local both = #left > 0 and #right > 0
+  local leftWidth = both and math.floor((width - gap) / 2) or width
+  local rightWidth = both and (width - gap - leftWidth) or width
+  local function column(ids, columnWidth)
+    local nodes = {}
+    local cardHeight = #ids == 1 and height or math.floor(height * 0.63)
+    for _, id in ipairs(ids) do
+      table.insert(nodes, stackedCard(id, columnWidth, cardHeight))
+    end
+    return ui.scroll({ width = columnWidth, gap = gap }, nodes)
+  end
+  local cols = {}
+  if #left > 0 then
+    table.insert(cols, column(left, leftWidth))
+  end
+  if #right > 0 then
+    table.insert(cols, column(right, rightWidth))
   end
   return ui.row({ flexGrow = 1, gap = gap }, cols)
 end
@@ -1648,45 +1679,46 @@ function update()
     large = { w = 0.93, h = 0.92, maxW = 1360, maxH = 860 },
   }
   local sz = sizes[noctalia.getConfig("window_size")] or sizes.large
-  local cardW = math.min(math.floor(logicalW * 0.96), math.max(760, math.min(sz.maxW, math.floor(logicalW * sz.w))))
-  local cardH = math.min(math.floor(logicalH * 0.96), math.max(520, math.min(sz.maxH, math.floor(logicalH * sz.h))))
+  local cardW = math.min(math.floor(logicalW * 0.96), math.max(640, math.min(sz.maxW, math.floor(logicalW * sz.w))))
+  local cardH = math.min(math.floor(logicalH * 0.96), math.max(470, math.min(sz.maxH, math.floor(logicalH * sz.h))))
 
   local short = cardH < 760
-  CHART_H = short and 40 or 84
+  CHART_H = math.clamp(math.floor((cardH - 430) / 4), 32, 84)
   AVATAR = short and 48 or 68
   HERO_FS = short and 20 or 28
   local pad, colGap = 22, 14
   if short then
     pad, colGap = 14, 10
   end
-  local usable = cardW - pad * 2 - colGap
-  local leftW = math.floor(usable * 3 / 5)
-  local rightW = usable - leftW
-  local todoTextW = rightW - 32 - 24 - 90
-  local screenInnerW = math.floor((leftW - colGap) / 2) - 32
+  local width = cardW - pad * 2
+  local height = math.max(0, cardH - (short and 147 or 173))
+  local leftW = math.floor((width - colGap) * 0.62)
+  local rightW = width - colGap - leftW
+  local chartWidth = math.floor((leftW - colGap) * 0.53)
 
   local body
   if draftLayout ~= nil then
     body = layoutEditor(colGap)
   elseif maximizedCard == "screen" then
-    CHART_H = short and 84 or 124
-    HERO_FS = 32
-    body = cachedScreenCard(usable + colGap - 32)
+    CHART_H = math.clamp(math.floor(height * 0.25), 48, 124)
+    HERO_FS = short and 26 or 32
+    body = cachedScreenCard(width - 32)
   elseif maximizedCard == "calendar" then
     body = cachedAgendaCard()
   elseif maximizedCard == "todo" then
-    body = cachedTodoCard(usable + colGap - 146)
+    body = cachedTodoCard(math.max(48, width - 146))
   elseif maximizedCard == "system" then
     body = systemCard()
   elseif maximizedCard == "github" then
-    local width = usable + colGap
     local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
-    local cell = math.max(4, math.min(16, math.floor((width - 28) / weeks) - 3))
+    local cell = math.max(1, math.min(16, math.floor((width - 25) / weeks) - 3))
     body = githubCard(width - 28, cell, 3, width)
   elseif savedLayout ~= nil then
-    body = customLayout(usable + colGap, cardH - (short and 147 or 173), colGap)
+    body = stackedLayout(savedLayout, width, height, colGap)
+  elseif chartWidth >= 300 and rightW >= 330 and height >= 500 then
+    body = wideLayout(leftW, rightW, chartWidth, short, colGap)
   else
-    body = defaultLayout(leftW, rightW, todoTextW, screenInnerW, short, colGap)
+    body = stackedLayout(Layout.defaults(compactGraph()), width, height, colGap)
   end
 
   local kids = {
