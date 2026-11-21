@@ -1558,7 +1558,9 @@ local function stackedLayout(layout, width, height, gap)
     for _, id in ipairs(ids) do
       table.insert(nodes, stackedCard(id, columnWidth, cardHeight))
     end
-    return ui.scroll({ width = columnWidth, gap = gap }, nodes)
+    return ui.column({ width = columnWidth }, {
+      ui.scroll({ gap = gap, flexGrow = 1 }, nodes),
+    })
   end
   local cols = {}
   if #left > 0 then
@@ -1567,7 +1569,7 @@ local function stackedLayout(layout, width, height, gap)
   if #right > 0 then
     table.insert(cols, column(right, rightWidth))
   end
-  return ui.row({ flexGrow = 1, gap = gap }, cols)
+  return ui.row({ width = width, flexGrow = 1, gap = gap }, cols)
 end
 
 function update()
