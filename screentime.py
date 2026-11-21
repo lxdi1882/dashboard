@@ -24,6 +24,15 @@ NAME_FIELDS = ("app", "app_id", "appId", "name", "id", "class", "title")
 VALUE_FIELDS = ("seconds", "secs", "duration", "time", "ms")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HOUR_RE = re.compile(r"^\d{1,2}$")
+BROWSER_APP = re.compile(
+    r"(?:^|[.])(?:brave|chromium|chrome|firefox|librewolf|waterfox|floorp|vivaldi|opera|"
+    r"microsoft-edge|zen-browser|qutebrowser|epiphany|falkon|thorium|ungoogled-chromium)"
+    r"(?:$|[-.])"
+)
+
+
+def is_browser(app):
+    return BROWSER_APP.search(app.lower()) is not None
 
 
 def classify(k):
@@ -237,6 +246,30 @@ def main():
                 }
         days.append(day)
 
+    highlights = []
+    for length in (1, 7, 14):
+        by = {}
+        seconds = 0
+        for date, _ in dates[-length:]:
+            a = accs.get(date)
+            if a is None:
+                continue
+            seconds += a.total
+            for app, duration in a.apps.items():
+                by[app] = by.get(app, 0) + duration
+        ranked_apps = sorted(by, key=lambda app: (-by[app], app))
+        leader = next((app for app in ranked_apps if by[app] > 0), "")
+        other = next((app for app in ranked_apps if by[app] > 0 and not is_browser(app)), "")
+        browser_time = sum(duration for app, duration in by.items() if is_browser(app))
+        highlights.append({
+            "total": int(seconds / div),
+            "top": leader,
+            "topSec": int(by.get(leader, 0) / div),
+            "browserSec": int(browser_time / div),
+            "outside": other if leader and is_browser(leader) else "",
+            "outsideSec": int(by.get(other, 0) / div),
+        })
+
     icons = desktop_icons() if top else {}
     print(json.dumps({
         "ok": True,
@@ -246,6 +279,7 @@ def main():
         "expanded": limit > 12,
         "days": days,
         "hours": hours,
+        "highlights": highlights,
     }))
 
 

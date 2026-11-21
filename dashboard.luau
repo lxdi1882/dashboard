@@ -777,6 +777,7 @@ end
 local screenRange = "today" -- "today" | "3d" | "14d"
 local screenDay = nil -- date opened from the 3-day or 14-day chart
 local screenSel = nil -- date and hour of the selected hourly bar
+local screenDetailsTab = "apps"
 local RANGES = {
   { k = "today", label = "Today", n = 1 },
   { k = "3d", label = "3 days", n = 3 },
@@ -1198,25 +1199,25 @@ local function screenCard(innerW)
     end
   end
 
-  local kids = { sectionTitle("device-desktop", "Screen time", nil, nil, "screen"), ui.column({ gap = 10 }, rows) }
+  local apps = {}
   if listTitle ~= nil then
-    table.insert(kids, ui.label({ text = listTitle, fontSize = 11, fontWeight = "bold", color = "on_surface_variant", maxLines = 1 }))
+    table.insert(apps, ui.label({ text = listTitle, fontSize = 12, fontWeight = "bold", color = "on_surface_variant", maxLines = 1 }))
     if #listRows == 0 then
       table.insert(listRows, ui.label({ text = "Nothing recorded for this period.", fontSize = 12, color = "on_surface_variant" }))
     end
-    table.insert(kids, ui.scroll({ gap = 8, flexGrow = 1 }, listRows))
+    table.insert(apps, ui.scroll({ gap = 8, flexGrow = 1 }, listRows))
     local hidden = otherSec
     if loadingMore and os.time() - loadingSince > 20 then
       loadingMore = false
     end
     if loadingMore then
       local dots = string.rep(".", os.time() % 3 + 1)
-      table.insert(kids, ui.row({ gap = 8, align = "center", justify = "center", paddingV = 7 }, {
+      table.insert(apps, ui.row({ gap = 8, align = "center", justify = "center", paddingV = 7 }, {
         ui.glyph({ name = "loader-2", size = 16, color = "primary" }),
         ui.label({ text = "Loading more apps" .. dots, fontSize = 12, color = "on_surface_variant" }),
       }))
     elseif hidden > 0 and not (screen ~= nil and screen.expanded) then
-      table.insert(kids, ui.row({
+      table.insert(apps, ui.row({
         key = "more-apps",
         gap = 6,
         align = "center",
@@ -1236,13 +1237,46 @@ local function screenCard(innerW)
       }))
     end
   end
-  return { flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 },
-    kids, chartIndex, rows
+  return {
+    title = sectionTitle("device-desktop", "Screen time", nil, nil, "screen"),
+    rows = rows, chartIndex = chartIndex, apps = apps,
+  }
 end
 
-local function renderScreenCard(innerW, props, kids, chartIndex, rows)
+local function screenHighlights()
+  local cards = {}
+  local labels = { "Today", "Last 7 days", "Last 14 days" }
+  for i, stats in ipairs(screen.highlights or {}) do
+    local children = { ui.label({ text = labels[i], fontSize = 11, color = "on_surface_variant" }) }
+    if stats.total > 0 and stats.top ~= "" then
+      table.insert(children, ui.row({ gap = 6, align = "center" }, {
+        ui.label({ text = stats.top, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
+        ui.label({ text = fmtDur(stats.topSec) .. " · " .. math.floor(100 * stats.topSec / stats.total + 0.5) .. "%",
+          fontSize = 12, maxLines = 1, color = "on_surface_variant" }),
+      }))
+      if stats.browserSec > 0 then
+        table.insert(children, ui.label({
+          text = math.floor(100 * stats.browserSec / stats.total + 0.5) .. "% browser time",
+          fontSize = 11, maxLines = 1, color = "on_surface_variant",
+        }))
+        if stats.outside ~= "" then
+          table.insert(children, ui.label({
+            text = "Top outside browser · " .. stats.outside .. " " .. fmtDur(stats.outsideSec),
+            fontSize = 11, maxLines = 1, color = "on_surface_variant",
+          }))
+        end
+      end
+    else
+      table.insert(children, ui.label({ text = "No recorded activity", fontSize = 12, color = "on_surface_variant" }))
+    end
+    table.insert(cards, ui.column({ gap = 2, padding = 6, radius = 7, fill = "surface_container_high" }, children))
+  end
+  return cards
+end
+
+local function screenChart(innerW, chartIndex, rows)
   if chartIndex == nil then
-    return card(props, kids)
+    return ui.column({ gap = 10 }, rows)
   end
 
   -- Reserve the same space with or without a readout so hovering cannot move the bars.
@@ -1263,9 +1297,56 @@ local function renderScreenCard(innerW, props, kids, chartIndex, rows)
 
   local visibleRows = table.clone(rows)
   visibleRows[chartIndex] = ui.column({ gap = 3 }, { readout, rows[chartIndex] })
-  local visibleKids = table.clone(kids)
-  visibleKids[2] = ui.column({ gap = 10 }, visibleRows)
-  return card(props, visibleKids)
+  return ui.column({ gap = 10 }, visibleRows)
+end
+
+local function renderScreenCard(innerW, model, sidebarWidth)
+  local chart = screenChart(innerW, model.chartIndex, model.rows)
+  local children = { model.title }
+  if maximizedCard ~= "screen" or #model.apps == 0 then
+    table.insert(children, chart)
+    for _, node in ipairs(model.apps) do
+      table.insert(children, node)
+    end
+    return card({ flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 }, children)
+  end
+
+  local highlights = screenHighlights()
+  if sidebarWidth ~= nil then
+    local sidebar = {}
+    if #highlights > 0 then
+      table.insert(highlights, 1, sectionTitle("chart-bar", "Usage highlights"))
+      table.insert(sidebar, card({ padding = 8, gap = 5 }, highlights))
+    end
+    table.insert(sidebar, card({ flexGrow = 1, padding = 10, gap = 6 }, model.apps))
+    table.insert(children, ui.row({ flexGrow = 1, gap = 10 }, {
+      ui.column({ width = innerW + 24 }, { card({ flexGrow = 1, padding = 12, gap = 8 }, { chart }) }),
+      ui.column({ width = sidebarWidth, gap = 8 }, sidebar),
+    }))
+  else
+    table.insert(children, chart)
+    if #highlights > 0 then
+      local function tab(id, text)
+        return ui.button({
+          key = "screen-tab-" .. id, text = text, controlSize = "sm",
+          variant = screenDetailsTab == id and "primary" or "ghost",
+          onClick = function()
+            screenDetailsTab = id
+            update()
+          end,
+        })
+      end
+      table.insert(children, ui.row({ gap = 6 }, { tab("apps", "Apps"), tab("highlights", "Highlights") }))
+    end
+    if screenDetailsTab == "highlights" and #highlights > 0 then
+      table.insert(children, ui.scroll({ gap = 5, flexGrow = 1 }, highlights))
+    else
+      for _, node in ipairs(model.apps) do
+        table.insert(children, node)
+      end
+    end
+  end
+  return card({ flexGrow = 1, padding = 12, gap = 8 }, children)
 end
 
 
@@ -1701,27 +1782,28 @@ local function cachedAgendaCard()
   return agendaCache.node
 end
 
-local function cachedScreenCard(innerW)
+local function cachedScreenCard(innerW, sidebarWidth)
   local screenFocus = maximizedCard == "screen"
   if loadingMore then
     -- The loading indicator and its timeout depend on the clock.
     screenCache = nil
-    return renderScreenCard(innerW, screenCard(innerW))
+    return renderScreenCard(innerW, screenCard(innerW), sidebarWidth)
   end
   local c = screenCache
   if c == nil or c.screen ~= screen or c.width ~= innerW or c.height ~= CHART_H
       or c.range ~= screenRange or c.day ~= screenDay or c.selection ~= screenSel or c.focus ~= screenFocus then
-    local props, kids, chartIndex, rows = screenCard(innerW)
     c = {
       screen = screen, width = innerW, height = CHART_H,
       range = screenRange, day = screenDay, selection = screenSel, focus = screenFocus,
-      props = props, kids = kids, chartIndex = chartIndex, rows = rows,
+      model = screenCard(innerW),
     }
     screenCache = c
   end
-  if c.node == nil or c.hover ~= screenHover then
+  if c.node == nil or c.hover ~= screenHover or c.sidebarWidth ~= sidebarWidth or c.tab ~= screenDetailsTab then
     c.hover = screenHover
-    c.node = renderScreenCard(innerW, c.props, c.kids, c.chartIndex, c.rows)
+    c.sidebarWidth = sidebarWidth
+    c.tab = screenDetailsTab
+    c.node = renderScreenCard(innerW, c.model, sidebarWidth)
   end
   return c.node
 end
@@ -1891,9 +1973,15 @@ function update()
 
   local body
   if maximizedCard == "screen" then
-    CHART_H = math.clamp(math.floor(height * 0.25), 48, 124)
+    local sidebarWidth = width >= 900 and height >= 460 and math.floor((width - 34) * 0.35) or nil
     HERO_FS = short and 26 or 32
-    body = cachedScreenCard(width - 32)
+    if sidebarWidth ~= nil then
+      CHART_H = math.clamp(height - 230, 80, 400)
+      body = cachedScreenCard(width - 58 - sidebarWidth, sidebarWidth)
+    else
+      CHART_H = math.clamp(math.floor((height - 216) * 0.40), 26, 105)
+      body = cachedScreenCard(width - 24)
+    end
   elseif maximizedCard == "calendar" then
     body = cachedAgendaCard()
   elseif maximizedCard == "todo" then
