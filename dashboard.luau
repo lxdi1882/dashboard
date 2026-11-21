@@ -470,6 +470,7 @@ local screenRange = "today" -- "today" | "3d" | "14d"
 local screenDay = nil -- date opened from the 3-day or 14-day chart
 local screenSel = nil -- date and hour of the selected hourly bar
 local screenFocus = false -- apps list expanded to fill the card
+local screenHover = nil
 noctalia.state.watch("visible", function(v)
   if not v then
     screenFocus = false
@@ -512,6 +513,28 @@ local function screenAppColors(apps)
   return colors
 end
 
+-- Layers can report hover events even when the shell does not show a tooltip.
+local function screenSegment(width, height, color, id, text, onClick)
+  return ui.box({
+    key = id,
+    width = width,
+    height = height,
+    fill = color,
+    onClick = onClick,
+    onHover = function(state)
+      if state == "true" then
+        if screenHover == nil or screenHover.id ~= id then
+          screenHover = { id = id, text = text, color = color }
+          update()
+        end
+      elseif screenHover ~= nil and screenHover.id == id then
+        screenHover = nil
+        update()
+      end
+    end,
+  })
+end
+
 local function bar(bucket, maxSec, width, key, selected, onClick, apps, colors)
   local children = {}
   if selected then
@@ -535,25 +558,15 @@ local function bar(bucket, maxSec, width, key, selected, onClick, apps, colors)
         usedSeconds = usedSeconds + duration
         local edge = math.floor(height * usedSeconds / total + 0.5)
         if edge > pixels then
-          table.insert(children, ui.box({
-            width = width,
-            height = edge - pixels,
-            fill = colors[app.id],
-            tooltip = app.name .. " · " .. fmtDur(duration),
-            onClick = onClick,
-          }))
+          table.insert(children, screenSegment(width, edge - pixels, colors[app.id],
+            bucket.key .. ":" .. app.id, app.name .. " · " .. fmtDur(duration), onClick))
           pixels = edge
         end
       end
     end
     if pixels < height then
-      table.insert(children, ui.box({
-        width = width,
-        height = height - pixels,
-        fill = OTHER_COLOR,
-        tooltip = "Other apps · " .. fmtDur(total - usedSeconds),
-        onClick = onClick,
-      }))
+      table.insert(children, screenSegment(width, height - pixels, OTHER_COLOR,
+        bucket.key .. ":_other", "Other apps · " .. fmtDur(total - usedSeconds), onClick))
     end
   end
 
@@ -591,6 +604,7 @@ local function rangeToggle()
         screenRange = r.k
         screenDay = nil
         screenSel = nil
+        screenHover = nil
         update()
       end,
     }, {
@@ -647,6 +661,7 @@ local function screenCard(innerW)
   local otherSec = 0
   local focusTotal, focusLabel = 0, ""
   local controls
+  local hasChart = false
 
   if screen == nil then
     table.insert(rows, screenMessage("Loading…", innerW))
@@ -690,6 +705,7 @@ local function screenCard(innerW)
         onClick = function()
           screenDay = nil
           screenSel = nil
+          screenHover = nil
           update()
         end,
       })
@@ -791,12 +807,14 @@ local function screenCard(innerW)
 
     -- 4. chart + aligned axis
     if #bars > 0 then
+      hasChart = true
       local gap = (#bars > 14) and 3 or 4
       local width = math.max(3, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
       local cols = {}
       for i, b in ipairs(bars) do
         local function selectBar()
           if not hourly then
+            screenHover = nil
             screenDay = b.key
             screenSel = nil
           elseif screenSel == b.key then
@@ -890,6 +908,7 @@ local function screenCard(innerW)
         tooltip = "Expand",
         onClick = function()
           screenFocus = true
+          screenHover = nil
           update()
         end,
       }))
@@ -952,7 +971,25 @@ local function screenCard(innerW)
       }),
     })
   end
-  return card({ flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 }, kids)
+  return { flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 },
+    kids, hasChart and not screenFocus
+end
+
+local function renderScreenCard(props, kids, showHover)
+  if not showHover then
+    return card(props, kids)
+  end
+  -- Keep the chart nodes and the readout's height stable as the pointer moves.
+  local hover = screenHover
+  local visibleKids = { kids[1] }
+  table.insert(visibleKids, ui.row({ gap = 6, align = "center" }, {
+    ui.box({ width = 8, height = 8, radius = 4, fill = hover and hover.color or "surface/0" }),
+    ui.label({ text = hover and hover.text or " ", fontSize = 12, color = "on_surface", maxLines = 1, flexGrow = 1 }),
+  }))
+  for i = 2, #kids do
+    table.insert(visibleKids, kids[i])
+  end
+  return card(props, visibleKids)
 end
 
 
@@ -1368,18 +1405,24 @@ local function cachedScreenCard(innerW)
   if loadingMore then
     -- The loading indicator and its timeout depend on the clock.
     screenCache = nil
-    return screenCard(innerW)
+    return renderScreenCard(screenCard(innerW))
   end
   local c = screenCache
   if c == nil or c.screen ~= screen or c.width ~= innerW or c.height ~= CHART_H
       or c.range ~= screenRange or c.day ~= screenDay or c.selection ~= screenSel or c.focus ~= screenFocus then
-    screenCache = {
+    local props, kids, showHover = screenCard(innerW)
+    c = {
       screen = screen, width = innerW, height = CHART_H,
       range = screenRange, day = screenDay, selection = screenSel, focus = screenFocus,
-      node = screenCard(innerW),
+      props = props, kids = kids, showHover = showHover,
     }
+    screenCache = c
   end
-  return screenCache.node
+  if c.node == nil or c.hover ~= screenHover then
+    c.hover = screenHover
+    c.node = renderScreenCard(c.props, c.kids, c.showHover)
+  end
+  return c.node
 end
 
 local function cachedTodoCard(textWidth)
