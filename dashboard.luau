@@ -467,7 +467,8 @@ end
 
 
 local screenRange = "today" -- "today" | "3d" | "14d"
-local screenSel = nil -- date for a day, date and hour for an hourly bar
+local screenDay = nil -- date opened from the 3-day or 14-day chart
+local screenSel = nil -- date and hour of the selected hourly bar
 local screenFocus = false -- apps list expanded to fill the card
 noctalia.state.watch("visible", function(v)
   if not v then
@@ -526,6 +527,7 @@ local function rangeToggle()
       fill = active and "primary" or "surface_container_high/0",
       onClick = function()
         screenRange = r.k
+        screenDay = nil
         screenSel = nil
         update()
       end,
@@ -582,6 +584,7 @@ local function screenCard(innerW)
   local listTitle = nil
   local otherSec = 0
   local focusTotal, focusLabel = 0, ""
+  local controls
 
   if screen == nil then
     table.insert(rows, screenMessage("Loading…", innerW))
@@ -602,25 +605,60 @@ local function screenCard(innerW)
       end
     end
     local sums, total = rangeSum(range.n)
-
-    -- 1. control
-    table.insert(rows, rangeToggle())
+    local detailDay = nil
+    if screenDay ~= nil then
+      for i = math.max(1, #screen.days - range.n + 1), #screen.days do
+        if screen.days[i].d == screenDay then
+          detailDay = screen.days[i]
+          break
+        end
+      end
+    end
+    local hourly = range.k == "today" or detailDay ~= nil
+    local dayLabel
+    if detailDay ~= nil then
+      sums, total = detailDay.by, detailDay.sec
+      dayLabel = os.date("%a, %b %d", dateToTime(detailDay.d))
+      controls = ui.button({
+        text = "Back to " .. string.lower(range.label),
+        glyph = "arrow-left",
+        variant = "ghost",
+        controlSize = "sm",
+        onClick = function()
+          screenDay = nil
+          screenSel = nil
+          update()
+        end,
+      })
+    else
+      controls = rangeToggle()
+    end
+    table.insert(rows, controls)
 
     -- 2. bars data (each bar carries its own axis label)
     local bars = {}
     local HOUR_LABELS = { [0] = "12 AM", [6] = "6 AM", [12] = "12 PM", [18] = "6 PM" }
-    if range.k == "today" then
-      if screen.hours ~= nil and #screen.hours == 24 then
-        local today = screen.days[#screen.days].d
-        for i, h in ipairs(screen.hours) do
+    if hourly then
+      local day = detailDay or screen.days[#screen.days]
+      local todayHours = day == screen.days[#screen.days] and screen.hours or nil
+      if (todayHours ~= nil and #todayHours == 24) or day.hours ~= nil then
+        for i = 1, 24 do
+          local h = todayHours and todayHours[i]
+          local by = h and h.by or (day.hours and day.hours["h" .. (i - 1)]) or {}
+          local sec = h and h.sec or 0
+          if h == nil then
+            for _, duration in pairs(by) do
+              sec = sec + duration
+            end
+          end
           local hour = string.format("%02d:00", i - 1)
           table.insert(bars, {
-            sec = h.sec,
-            by = h.by or {},
-            tip = hour .. " · " .. fmtDur(h.sec),
+            sec = sec,
+            by = by,
+            tip = hour .. " · " .. fmtDur(sec),
             name = hour,
             label = string.format("%s–%02d:00", hour, i % 24),
-            key = today .. "T" .. hour,
+            key = day.d .. "T" .. hour,
             top = HOUR_LABELS[i - 1],
           })
         end
@@ -659,12 +697,12 @@ local function screenCard(innerW)
 
     -- 3. hero number + one supporting stat
     local statLabel, statValue
-    if range.k == "today" then
+    if hourly then
       statLabel, statValue = "peak hour", (peakIdx > 0) and bars[peakIdx].name or "–"
     else
       statLabel, statValue = "daily avg", fmtDur(total / range.n)
     end
-    local heroLabel = "total · " .. string.lower(range.label)
+    local heroLabel = "total · " .. (dayLabel or string.lower(range.label))
     if selectedBar ~= nil then
       local n = 0
       for id, v in pairs(sums) do
@@ -694,18 +732,21 @@ local function screenCard(innerW)
       local width = math.max(3, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
       local cols = {}
       for i, b in ipairs(bars) do
-        local function toggleSelection()
-          if screenSel == b.key then
+        local function selectBar()
+          if not hourly then
+            screenDay = b.key
+            screenSel = nil
+          elseif screenSel == b.key then
             screenSel = nil
           else
             screenSel = b.key
           end
           update()
         end
-        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, b == selectedBar, toggleSelection))
+        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, b == selectedBar, selectBar))
       end
       local step = 1
-      if range.k == "today" then
+      if hourly then
         step = 6
       elseif width < 30 then
         step = 2
@@ -715,6 +756,8 @@ local function screenCard(innerW)
         ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 0 }),
         axisRow(bars, width, gap, step),
       }))
+    elseif detailDay ~= nil then
+      table.insert(rows, screenMessage("No hourly data recorded for this day.", innerW))
     else
       table.insert(rows, screenMessage("No activity recorded for this range yet.", innerW))
     end
@@ -724,6 +767,8 @@ local function screenCard(innerW)
     otherSec = sums["_other"] or 0
     if selectedBar ~= nil then
       listTitle = selectedBar.label .. " · apps used"
+    elseif detailDay ~= nil then
+      listTitle = dayLabel .. " · apps used"
     elseif range.k == "today" then
       listTitle = "Apps used today"
     else
@@ -829,7 +874,7 @@ local function screenCard(innerW)
       ui.label({ text = "Screen time", fontSize = 15, fontWeight = "bold", color = "on_surface" }),
     })
     kids[2] = ui.column({ gap = 10 }, {
-      rangeToggle(),
+      controls,
       ui.column({ gap = 0 }, {
         ui.label({ text = fmtDur(focusTotal), fontSize = 28, fontWeight = "bold", color = "on_surface" }),
         ui.label({ text = focusLabel, fontSize = 11, color = "on_surface_variant" }),
@@ -1256,10 +1301,10 @@ local function cachedScreenCard(innerW)
   end
   local c = screenCache
   if c == nil or c.screen ~= screen or c.width ~= innerW or c.height ~= CHART_H
-      or c.range ~= screenRange or c.selection ~= screenSel or c.focus ~= screenFocus then
+      or c.range ~= screenRange or c.day ~= screenDay or c.selection ~= screenSel or c.focus ~= screenFocus then
     screenCache = {
       screen = screen, width = innerW, height = CHART_H,
-      range = screenRange, selection = screenSel, focus = screenFocus,
+      range = screenRange, day = screenDay, selection = screenSel, focus = screenFocus,
       node = screenCard(innerW),
     }
   end

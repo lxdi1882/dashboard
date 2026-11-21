@@ -3,7 +3,7 @@
 
 Usage: screentime.py <path-to-screen_time.json>
 Prints one small JSON object on stdout. The file layout is undocumented, so this
-is structure-agnostic: it finds every node that belongs to one of the last 7
+is structure-agnostic: it finds every node that belongs to one of the last 14
 dates, then classifies each number by its key path:
   * a key "0".."23" (or a 24-long numeric list) is an hour bucket
   * the last other string key (not a date / generic word) is the app name
@@ -220,16 +220,22 @@ def main():
         return out
 
     days = []
+    hours = []
     for d, lab in dates:
         a = accs.get(d)
-        days.append({"d": d, "label": lab, "sec": int(a.total / div) if a else 0, "by": fold(a.apps) if a else {}})
-
-    today = accs.get(dates[-1][0])
-    hours = []
-    if today is not None and today.hour_apps:
-        for h in range(24):
-            by = fold(today.hour_apps.get(h, {}))
-            hours.append({"sec": sum(by.values()), "by": by})
+        day = {"d": d, "label": lab, "sec": int(a.total / div) if a else 0, "by": fold(a.apps) if a else {}}
+        if a is not None and a.hour_apps:
+            if d == dates[-1][0]:
+                for h in range(24):
+                    by = fold(a.hour_apps.get(h, {}))
+                    hours.append({"sec": sum(by.values()), "by": by})
+            else:
+                # Send only recorded buckets. The dashboard fills the gaps with zeroes.
+                day["hours"] = {
+                    f"h{h}": by for h, apps in a.hour_apps.items()
+                    if 0 <= h < 24 and (by := fold(apps))
+                }
+        days.append(day)
 
     icons = desktop_icons() if top else {}
     print(json.dumps({
