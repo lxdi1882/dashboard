@@ -26,3 +26,13 @@ YOUR_USER ALL=(root) NOPASSWD: /usr/local/bin/set-governor
 ```
 
 Without this, the buttons show an error notification. The governor resets on reboot.
+
+## Brave site time (optional)
+
+The maximized Screen Time card has a **Sites** tab for the selected day or date range. Site totals are a breakdown of Brave usage and are collected separately from Noctalia’s app totals.
+
+1. From this checkout, run `python3 browser/native-host.py --install`. If Brave uses a custom user data directory or you have multiple Brave editions, pass the directory after `--install`. In `brave://version`, it is the directory containing the profile listed under **Profile Path**.
+2. Open `brave://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `browser` directory in this checkout.
+3. Open **Dashboard Site Time** from the extensions menu and click **Start tracking**. Accept the tab access prompt. Dashboard Site Time stays paused until you start it.
+
+The companion counts time on an HTTP(S) domain while Brave has focus and the screen is unlocked. It stores only domain totals locally, with no page paths, titles, or search terms. Private windows are excluded. The dashboard shows up to 14 days of totals. Use **Pause tracking** or **Clear site totals** from the extension popup. The dashboard refreshes the site list along with its normal screen-time data.

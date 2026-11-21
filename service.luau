@@ -115,9 +115,11 @@ local function refreshScreenTime()
   if dir == nil then
     return
   end
-  local file = stateHome() .. "/noctalia/screen_time.json"
+  local home = stateHome()
+  local file = home .. "/noctalia/screen_time.json"
+  local sites = home .. "/lat-dashboard/site-usage"
   screenBusy = true
-  local started = noctalia.runAsync({ "python3", dir .. "/screentime.py", file, tostring(screenLimit) }, function(result)
+  local started = noctalia.runAsync({ "python3", dir .. "/screentime.py", file, tostring(screenLimit), sites }, function(result)
     screenBusy = false
     if result.exitCode ~= 0 then
       noctalia.log("screentime.py failed: " .. tostring(result.stderr))

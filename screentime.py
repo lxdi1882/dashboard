@@ -10,6 +10,7 @@ dates, then classifies each number by its key path:
 """
 import json
 import os
+from pathlib import Path
 import re
 import sys
 import time
@@ -173,6 +174,47 @@ def desktop_icons():
     return idx
 
 
+def load_sites(directory, dates):
+    """Read aggregate domain durations exported by the optional Brave companion."""
+    days = {day: {} for day, _ in dates}
+    loaded = False
+    for path in Path(directory).glob("*.json"):
+        try:
+            profile = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(profile, dict):
+            continue
+        loaded = True
+        for day, by_domain in profile.items():
+            if day not in days or not isinstance(by_domain, dict):
+                continue
+            for domain, duration in by_domain.items():
+                if type(duration) is int and duration > 0 and re.fullmatch(r"[a-z0-9.-]{1,253}", domain):
+                    days[day][domain] = days[day].get(domain, 0) + duration
+    if not loaded:
+        return None
+
+    def ranked(values):
+        return [
+            {"domain": domain, "sec": ms // 1000}
+            for domain, ms in sorted(values.items(), key=lambda item: (-item[1], item[0]))[:10]
+            if ms >= 1000
+        ]
+
+    def totals(n):
+        result = {}
+        for day, _ in dates[-n:]:
+            for domain, ms in days[day].items():
+                result[domain] = result.get(domain, 0) + ms
+        return ranked(result)
+
+    return {
+        "days": {day: ranked(values) for day, values in days.items()},
+        "ranges": {key: totals(n) for key, n in (("today", 1), ("3d", 3), ("14d", 14))},
+    }
+
+
 def main():
     path = sys.argv[1]
     try:
@@ -270,6 +312,7 @@ def main():
             "outsideSec": int(by.get(other, 0) / div),
         })
 
+    sites = load_sites(sys.argv[3], dates) if len(sys.argv) > 3 else None
     icons = desktop_icons() if top else {}
     print(json.dumps({
         "ok": True,
@@ -280,6 +323,7 @@ def main():
         "days": days,
         "hours": hours,
         "highlights": highlights,
+        **({"sites": sites} if sites is not None else {}),
     }))
 
 

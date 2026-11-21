@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Dashboard Site Time",
+  "version": "1.0.0",
+  "description": "Share local, domain-only foreground time with the Noctalia dashboard.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAto6SZ4G01cUeNZeECU4j6xo6MbD1qzdrrgW4sPRyp/na/u8WGuXZZGUULT598uxi5MGjSXP8cFQMTv0/8OsOp8ulRaCyS/hVvt2jJ9PNWBnYQUmL+dpqkBMKmyavud7q/ndzEtWSbyfyUXGMrycdWNKEdU9ScN1/WczDp8eokRup5G41SEDTDMhsnfXDtmVbxZhF2Nv+K5e1X82x8+i9x0xJjgxB5L8qhW8XP/CbNDSCYJYG77sIDYD7V91h3iyGgcTrRNBbCnU6MQ8kmguY9ctTpA55ImGdAMI+VyUqKHZyjWzvDmmj984pi+9m1X3+JzwnV8SVlGJOUzRI2Jpv0QIDAQAB",
+  "incognito": "not_allowed",
+  "permissions": [
+    "alarms",
+    "idle",
+    "nativeMessaging",
+    "storage"
+  ],
+  "optional_permissions": [
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "action": {
+    "default_title": "Dashboard Site Time",
+    "default_popup": "popup.html"
+  }
+}
