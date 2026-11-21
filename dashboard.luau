@@ -778,6 +778,22 @@ local screenRange = "today" -- "today" | "3d" | "14d"
 local screenDay = nil -- date opened from the 3-day or 14-day chart
 local screenSel = nil -- date and hour of the selected hourly bar
 local screenDetailsTab = "apps"
+local screenSite = nil
+local screenSiteDay = nil
+
+local function openScreenSite(domain)
+  screenDetailsTab = "sites"
+  screenSite = domain
+  screenSiteDay = nil
+  update()
+end
+
+local function siteIcon(icon, size)
+  if icon ~= nil and icon ~= "" then
+    return ui.image({ path = icon, width = size, height = size, fit = "contain" })
+  end
+  return ui.glyph({ name = "world", size = size, color = "primary" })
+end
 local RANGES = {
   { k = "today", label = "Today", n = 1 },
   { k = "3d", label = "3 days", n = 3 },
@@ -1190,8 +1206,7 @@ local function screenCard(innerW)
         table.insert(listRows, ui.row({
           key = "sa" .. i, gap = 10, align = "center",
           onClick = brave and function()
-            screenDetailsTab = "sites"
-            update()
+            openScreenSite(nil)
           end or nil,
         }, {
           lead,
@@ -1263,6 +1278,7 @@ end
 local function screenHighlights()
   local cards = {}
   local labels = { "Today", "Last 7 days", "Last 14 days" }
+  local sitePeriods = { "today", "7d", "14d" }
   for i, stats in ipairs(screen.highlights or {}) do
     local children = { ui.label({ text = labels[i], fontSize = 11, color = "on_surface_variant" }) }
     if stats.total > 0 and stats.top ~= "" then
@@ -1285,6 +1301,25 @@ local function screenHighlights()
       end
     else
       table.insert(children, ui.label({ text = "No recorded activity", fontSize = 12, color = "on_surface_variant" }))
+    end
+    local period = sitePeriods[i]
+    local sites = screen.sites and screen.sites.ranges[period]
+    local leader = sites and sites[1]
+    if leader ~= nil then
+      local total = screen.sites.rangeTotals and screen.sites.rangeTotals[period] or 0
+      local duration = fmtDur(leader.sec)
+      if total > 0 then
+        duration = duration .. " · " .. math.floor(100 * leader.sec / total + 0.5) .. "% of site time"
+      end
+      table.insert(children, ui.row({
+        key = "top-site-" .. period, gap = 5, align = "center", paddingV = 3,
+        onClick = function() openScreenSite(leader.domain) end,
+      }, {
+        siteIcon(leader.icon, 13),
+        ui.label({ text = leader.domain, fontSize = 11, maxLines = 1, flexGrow = 1, color = "on_surface" }),
+        ui.label({ text = duration, fontSize = 11, color = "on_surface_variant" }),
+        ui.glyph({ name = "chevron-right", size = 12, color = "on_surface_variant" }),
+      }))
     end
     table.insert(cards, ui.column({ gap = 2, padding = 6, radius = 7, fill = "surface_container_high" }, children))
   end
@@ -1317,7 +1352,84 @@ local function screenChart(innerW, chartIndex, rows)
   return ui.column({ gap = 10 }, visibleRows)
 end
 
-local function screenSites()
+local function screenSiteTrend(width, trend, calendar)
+  local before, count, peak = 0, 0, 1
+  for i, sec in ipairs(trend.seconds) do
+    if i < #calendar and calendar[i].recorded then
+      before = before + sec
+      count = count + 1
+    end
+    peak = math.max(peak, sec)
+  end
+
+  local today = #calendar
+  local chartW = math.max(1, width - 20)
+  local gap = chartW >= 290 and 5 or 3
+  local barW = math.max(2, math.floor((chartW - (#calendar - 1) * gap) / #calendar))
+  local bars = {}
+  for i, day in ipairs(calendar) do
+    local sec = trend.seconds[i] or 0
+    local fill = not day.recorded and "surface_container"
+      or (i == today and "primary" or (sec > 0 and "primary/0.6" or "surface_container_high"))
+    table.insert(bars, ui.column({
+      key = "site-day-" .. day.date, width = barW, height = 62, justify = "end",
+      onHover = function(entered)
+        if entered == "true" and screenSiteDay ~= i then
+          screenSiteDay = i
+          update()
+        elseif entered == "false" and screenSiteDay == i then
+          screenSiteDay = nil
+          update()
+        end
+      end,
+    }, { ui.box({ width = barW, height = math.max(3, math.floor(58 * sec / peak)), radius = 3, fill = fill }) }))
+  end
+
+  local point = screenSiteDay and calendar[screenSiteDay]
+  local label = "Daily website time"
+  if point ~= nil then
+    local day = os.date("%b %d", dateToTime(point.date))
+    label = day .. " · " .. (point.recorded and fmtDur(trend.seconds[screenSiteDay]) or "No browser data")
+  end
+  local heading = ui.row({ gap = 6, align = "center" }, {
+    ui.button({
+      key = "back-to-sites", glyph = "arrow-left", text = "Sites", variant = "ghost", controlSize = "sm",
+      onClick = function() openScreenSite(nil) end,
+    }),
+    siteIcon(trend.icon, 16),
+    ui.label({ text = screenSite, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
+  })
+  local stats = ui.row({ gap = 14, align = "start" }, {
+    stat(calendar[today].recorded and fmtDur(trend.seconds[today]) or "–", "Today"),
+    stat(count > 0 and fmtDur(math.floor(before / count + 0.5)) or "–", "Prior daily average"),
+  })
+  local first = os.date("%b %d", dateToTime(calendar[1].date))
+  return { heading, ui.scroll({ flexGrow = 1, gap = 8 }, {
+    stats,
+    ui.label({
+      text = count > 0 and ("Average across " .. count .. (count == 1 and " day" or " days") .. " with browser data")
+        or "The average appears after another day is recorded.",
+      fontSize = 11, maxLines = 2, color = "on_surface_variant",
+    }),
+    ui.column({ paddingH = 6, paddingV = 6, gap = 8 }, {
+      ui.label({ text = label, fontSize = 12, maxLines = 1, color = "on_surface_variant" }),
+      ui.row({ width = #calendar * barW + (#calendar - 1) * gap, gap = gap, align = "end" }, bars),
+      ui.row({ gap = 4, align = "center" }, {
+        ui.label({ text = first, fontSize = 11, color = "on_surface_variant" }),
+        ui.spacer({ flexGrow = 1 }),
+        ui.label({ text = "Today", fontSize = 11, color = "on_surface_variant" }),
+      }),
+    }),
+  }) }
+end
+
+local function screenSites(width)
+  local data = screen.sites
+  local trend = screenSite and data and data.trends and data.trends[screenSite]
+  if trend ~= nil and data.calendar ~= nil and #data.calendar > 0 then
+    return screenSiteTrend(width, trend, data.calendar)
+  end
+
   local heading = "Sites today"
   local items = {}
   if screen.sites ~= nil then
@@ -1343,12 +1455,13 @@ local function screenSites()
   end
   for _, item in ipairs(items) do
     table.insert(rows, ui.row({ key = "site-" .. item.domain, gap = 8, paddingH = 7, paddingV = 5,
-      align = "center", radius = 7, fill = "surface_container_high" }, {
-      item.icon ~= nil and item.icon ~= ""
-        and ui.image({ path = item.icon, width = 16, height = 16, fit = "contain" })
-        or ui.glyph({ name = "world", size = 16, color = "primary" }),
+      align = "center", radius = 7, fill = "surface_container_high",
+      onClick = function() openScreenSite(item.domain) end,
+    }, {
+      siteIcon(item.icon, 16),
       ui.label({ text = item.domain, fontSize = 12, maxLines = 1, flexGrow = 1, color = "on_surface" }),
       ui.label({ text = fmtDur(item.sec), fontSize = 12, color = "on_surface_variant" }),
+      ui.glyph({ name = "chevron-right", size = 13, color = "on_surface_variant" }),
     }))
   end
   return {
@@ -1361,8 +1474,12 @@ local function screenTab(id, text, active)
   return ui.button({
     key = "screen-tab-" .. id, text = text, controlSize = "sm", variant = active and "primary" or "ghost",
     onClick = function()
-      screenDetailsTab = id
-      update()
+      if id == "sites" then
+        openScreenSite(nil)
+      else
+        screenDetailsTab = id
+        update()
+      end
     end,
   })
 end
@@ -1387,7 +1504,7 @@ local function renderScreenCard(innerW, model, sidebarWidth)
     end
     local showSites = screenDetailsTab == "sites"
     local details = { ui.row({ gap = 6 }, { screenTab("apps", "Apps", not showSites), screenTab("sites", "Sites", showSites) }) }
-    for _, node in ipairs(showSites and screenSites() or model.apps) do
+    for _, node in ipairs(showSites and screenSites(sidebarWidth - 24) or model.apps) do
       table.insert(details, node)
     end
     table.insert(sidebar, card({ flexGrow = 1, padding = 10, gap = 6 }, details))
@@ -1407,7 +1524,7 @@ local function renderScreenCard(innerW, model, sidebarWidth)
     if showHighlights then
       table.insert(children, ui.scroll({ gap = 5, flexGrow = 1 }, highlights))
     else
-      for _, node in ipairs(showSites and screenSites() or model.apps) do
+      for _, node in ipairs(showSites and screenSites(innerW - 4) or model.apps) do
         table.insert(children, node)
       end
     end
@@ -1865,10 +1982,13 @@ local function cachedScreenCard(innerW, sidebarWidth)
     }
     screenCache = c
   end
-  if c.node == nil or c.hover ~= screenHover or c.sidebarWidth ~= sidebarWidth or c.tab ~= screenDetailsTab then
+  if c.node == nil or c.hover ~= screenHover or c.sidebarWidth ~= sidebarWidth or c.tab ~= screenDetailsTab
+      or c.site ~= screenSite or c.siteDay ~= screenSiteDay then
     c.hover = screenHover
     c.sidebarWidth = sidebarWidth
     c.tab = screenDetailsTab
+    c.site = screenSite
+    c.siteDay = screenSiteDay
     c.node = renderScreenCard(innerW, c.model, sidebarWidth)
   end
   return c.node

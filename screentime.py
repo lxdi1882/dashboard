@@ -8,13 +8,13 @@ dates, then classifies each number by its key path:
   * a key "0".."23" (or a 24-long numeric list) is an hour bucket
   * the last other string key (not a date / generic word) is the app name
 """
+from datetime import date as calendar_date, timedelta
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sys
-import time
 
 GENERIC = {
     "total", "totalSeconds", "total_seconds", "seconds", "secs", "duration", "time", "ms",
@@ -211,16 +211,27 @@ def load_sites(directory, dates):
             rows.append({"domain": domain, "sec": ms // 1000, "icon": icons[domain]})
         return rows
 
-    def totals(n):
-        result = {}
-        for day, _ in dates[-n:]:
+    listed_days = {day: ranked(values) for day, values in days.items()}
+    ranges, range_totals = {}, {}
+    for key, length in (("today", 1), ("3d", 3), ("7d", 7), ("14d", 14)):
+        totals = {}
+        for day, _ in dates[-length:]:
             for domain, ms in days[day].items():
-                result[domain] = result.get(domain, 0) + ms
-        return ranked(result)
+                totals[domain] = totals.get(domain, 0) + ms
+        ranges[key] = ranked(totals)
+        range_totals[key] = sum(totals.values()) // 1000
 
+    # Include exact daily totals for every listed site, even on days it ranked below the top ten.
+    domains = sorted({row["domain"] for listing in (*listed_days.values(), *ranges.values()) for row in listing})
     return {
-        "days": {day: ranked(values) for day, values in days.items()},
-        "ranges": {key: totals(n) for key, n in (("today", 1), ("3d", 3), ("14d", 14))},
+        "days": listed_days,
+        "ranges": ranges,
+        "rangeTotals": range_totals,
+        "calendar": [{"date": day, "recorded": bool(days[day])} for day, _ in dates],
+        "trends": {domain: {
+            "seconds": [days[day].get(domain, 0) // 1000 for day, _ in dates],
+            "icon": icons[domain],
+        } for domain in domains},
     }
 
 
@@ -238,11 +249,9 @@ def main():
         print(json.dumps({"ok": False, "sample": sample}))
         return
 
-    now = time.time()
-    dates = []
-    for i in range(13, -1, -1):  # last 14 days, oldest first
-        t = now - i * 86400
-        dates.append((time.strftime("%Y-%m-%d", time.localtime(t)), time.strftime("%a", time.localtime(t))))
+    today = calendar_date.today()
+    recent_dates = [today - timedelta(days=i) for i in range(13, -1, -1)]
+    dates = [(day.isoformat(), day.strftime("%a")) for day in recent_dates]
     date_set = {d for d, _ in dates}
 
     found = []
