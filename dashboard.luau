@@ -929,29 +929,32 @@ end
 
 -- labels under the chart, each one sitting under the first bar of its group
 local function axisRow(bars, width, gap, step)
-  local segW = step * width + (step - 1) * gap
   local cells = {}
   for i = 1, #bars, step do
     local b = bars[i]
+    local barsInGroup = math.min(step, #bars - i + 1)
+    local segW = barsInGroup * width + (barsInGroup - 1) * gap
     local lines = {
       ui.box({ width = 1, height = 4, fill = "outline_variant" }),
       ui.label({
         text = b.top or "",
-        fontSize = 11,
+        maxWidth = segW,
+        fontSize = segW < 33 and 10 or 11,
         fontWeight = b.today and "bold" or "normal",
         color = b.today and "primary" or "on_surface",
         maxLines = 1,
       }),
     }
-    if b.sub ~= nil then
+    if b.sub ~= nil and segW >= 20 then
       table.insert(lines, ui.label({
         text = b.sub,
+        maxWidth = segW,
         fontSize = 10,
         color = b.today and "primary" or "on_surface_variant",
         maxLines = 1,
       }))
     end
-    table.insert(cells, ui.column({ key = "ax" .. i, width = segW, gap = 2, align = "start" }, lines))
+    table.insert(cells, ui.column({ key = "ax" .. i, width = segW, gap = 2, align = "start", clip = true }, lines))
   end
   return ui.row({ gap = gap, align = "start" }, cells)
 end
@@ -1108,8 +1111,11 @@ local function screenCard(innerW)
 
     -- 4. chart + aligned axis
     if #bars > 0 then
-      local gap = innerW < 240 and 2 or ((#bars > 14) and 3 or 4)
-      local width = math.max(1, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
+      local inset = 4
+      local plotWidth = math.max(1, innerW - inset * 2)
+      local gap = plotWidth < 240 and 2 or ((#bars > 14) and 3 or 4)
+      local width = math.max(1, math.min(48, math.floor((plotWidth - (#bars - 1) * gap) / #bars)))
+      local axisWidth = #bars * width + (#bars - 1) * gap
       local cols = {}
       for i, b in ipairs(bars) do
         local function selectBar()
@@ -1124,7 +1130,7 @@ local function screenCard(innerW)
           end
           update()
         end
-        local x = (i - 1) * (width + gap) + width / 2
+        local x = inset + (i - 1) * (width + gap) + width / 2
         table.insert(cols, bar(b, maxSec, width, "sb" .. i, b == selectedBar, selectBar, screen.apps, colors, x))
       end
       local step = 1
@@ -1134,9 +1140,9 @@ local function screenCard(innerW)
         step = 2
       end
       chartIndex = #rows + 1
-      table.insert(rows, ui.column({ gap = 4 }, {
-        ui.row({ gap = gap, align = "end" }, cols),
-        ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 0 }),
+      table.insert(rows, ui.column({ gap = 5, paddingH = inset, paddingV = 2, align = "start" }, {
+        ui.row({ width = axisWidth, gap = gap, align = "end" }, cols),
+        ui.box({ width = axisWidth, height = 1, fill = "outline_variant/0.5" }),
         axisRow(bars, width, gap, step),
       }))
     elseif detailDay ~= nil then
@@ -1320,7 +1326,7 @@ local function renderScreenCard(innerW, model, sidebarWidth)
     end
     table.insert(sidebar, card({ flexGrow = 1, padding = 10, gap = 6 }, model.apps))
     table.insert(children, ui.row({ flexGrow = 1, gap = 10 }, {
-      ui.column({ width = innerW + 24 }, { card({ flexGrow = 1, padding = 12, gap = 8 }, { chart }) }),
+      ui.column({ width = innerW + 24, clip = true }, { card({ flexGrow = 1, padding = 12, gap = 8 }, { chart }) }),
       ui.column({ width = sidebarWidth, gap = 8 }, sidebar),
     }))
   else
@@ -1976,7 +1982,7 @@ function update()
     local sidebarWidth = width >= 900 and height >= 460 and math.floor((width - 34) * 0.35) or nil
     HERO_FS = short and 26 or 32
     if sidebarWidth ~= nil then
-      CHART_H = math.clamp(height - 230, 80, 400)
+      CHART_H = math.clamp(height - 270, 80, 390)
       body = cachedScreenCard(width - 58 - sidebarWidth, sidebarWidth)
     else
       CHART_H = math.clamp(math.floor((height - 216) * 0.40), 26, 105)
