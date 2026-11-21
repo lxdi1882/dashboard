@@ -256,11 +256,10 @@ end
 
 ------------------------------------------------------------------ GitHub graph + hover details
 
-local function levelColor(l)
-  local mode = noctalia.getConfig("graph_palette")
+local function levelColor(l, mode, dark)
   if l <= 0 then
     if mode == "github" then
-      return noctalia.isDarkMode() and "#161b22" or "#ebedf0"
+      return dark and "#161b22" or "#ebedf0"
     end
     return "surface_container_high"
   end
@@ -268,7 +267,7 @@ local function levelColor(l)
     l = 4
   end
   if mode == "github" then
-    if noctalia.isDarkMode() then
+    if dark then
       return ({ "#0e4429", "#006d32", "#26a641", "#39d353" })[l]
     end
     return ({ "#9be9a8", "#40c463", "#30a14e", "#216e39" })[l]
@@ -276,9 +275,10 @@ local function levelColor(l)
   return ({ "primary/0.30", "primary/0.50", "primary/0.75", "primary" })[l]
 end
 
-local function buildGrid(cell, gap)
+local function buildGrid(cell, gap, first, last, palette, dark)
   local cols = {}
-  for wi, week in ipairs(gh.weeks) do
+  for wi = first, last do
+    local week = gh.weeks[wi]
     local cells = {}
     for di, c in ipairs(week) do
       if c.l < 0 then
@@ -289,7 +289,7 @@ local function buildGrid(cell, gap)
           width = cell,
           height = cell,
           radius = math.max(2, math.floor(cell / 4)),
-          fill = levelColor(c.l),
+          fill = levelColor(c.l, palette, dark),
           tooltip = c.c .. (c.c == 1 and " contribution" or " contributions") .. " · " .. os.date("%a, %b %d", dateToTime(c.d)),
           onHover = function(state)
             if state == "true" then
@@ -334,70 +334,144 @@ local function ghRefreshButton()
   })
 end
 
--- The card is sized to its graph (not stretched across the column). Returns the card.
-local function githubCard(inner, cell, gap, cardWidth)
-  local body
-  if gh == nil then
-    body = ui.label({ text = "Loading contributions…", fontSize = 13, color = "on_surface_variant" })
-  elseif gh.ok ~= true then
-    body = ui.label({
-      text = "Couldn't load GitHub data (" .. tostring(gh.err or "unknown") .. "). Retrying soon.",
-      fontSize = 13,
-      color = "error",
-      maxLines = 2,
-      maxWidth = inner,
-    })
-  else
-    local key = cell .. "|" .. tostring(noctalia.getConfig("graph_palette")) .. "|" .. tostring(noctalia.isDarkMode())
-    if gridCache == nil or gridKey ~= key then
-      gridCache = buildGrid(cell, gap)
-      gridKey = key
-    end
-    local statsRow = {
-      stat(tostring(gh.today), "today"),
-      stat(gh.streak .. (gh.streak == 1 and " day" or " days"), "streak"),
-      stat(gh.best .. (gh.best == 1 and " day" or " days"), "longest"),
-      stat(tostring(gh.maxDay), "best day"),
-    }
-    if ghCommits ~= nil and ghCommits.ok == true and ghCommits.user == noctalia.getConfig("github_user") then
-      table.insert(statsRow, stat(tostring(ghCommits.n), "commits · " .. ghCommits.year))
-    end
-    local stats = ui.row({ gap = inner >= 400 and 18 or 8, align = "end" }, statsRow)
-    if inner >= 480 then
-      local legend = { ui.label({ text = "Less", fontSize = 10, color = "on_surface_variant" }) }
-      for l = 0, 4 do
-        table.insert(legend, ui.box({ width = 10, height = 10, radius = 3, fill = levelColor(l) }))
+local githubPage = 0
+
+local function githubActivity(width, height)
+  local gap, minCell = 2, 8
+  local weeks = #gh.weeks
+  local expanded = maximizedCard == "github"
+  local capacity = math.floor((width + gap) / (minCell + gap))
+  local paged = expanded and capacity < weeks
+  local showStats = height >= 230
+  local budget = height - 92 - (showStats and 44 or 0) - (paged and 35 or 0)
+  local maxCell = math.floor((budget - 6 * gap) / 7)
+  if weeks == 0 or capacity < 1 or maxCell < minCell then
+    return nil
+  end
+
+  local density = noctalia.getConfig("graph_size") == "compact" and 9 or 12
+  local visible = expanded and math.min(weeks, capacity) or math.min(weeks,
+    math.floor((width + gap) / (math.min(maxCell, density) + gap)))
+  local cell = math.min(maxCell, expanded and 16 or 14, math.floor((width + gap) / visible) - gap)
+  local lastPage = math.floor((weeks - 1) / visible)
+  local page = expanded and math.min(githubPage, lastPage) or 0
+  local last = weeks - visible * page
+  local first = math.max(1, last - visible + 1)
+  return { gap = gap, cell = cell, first = first, last = last, page = page, lastPage = lastPage, stats = showStats }
+end
+
+local function githubCard(width, height)
+  local inner = width - 24
+  local expanded = maximizedCard == "github"
+  if not expanded then
+    githubPage = 0
+  end
+  local caption = "GitHub"
+  local user = noctalia.getConfig("github_user") or ""
+  if inner >= 360 and user ~= "" then
+    caption = "GitHub · " .. tostring(user)
+  end
+  local contents = { sectionTitle("brand-github", caption, nil, ghRefreshButton(), "github") }
+  if gh == nil or gh.ok ~= true then
+    table.insert(contents, ui.label({
+      text = gh == nil and "Loading contributions…" or "Couldn’t load contributions. Retrying soon.",
+      fontSize = 12, maxLines = 2, maxWidth = inner,
+      color = gh == nil and "on_surface_variant" or "error",
+    }))
+    return card({ width = width, flexGrow = 1, padding = 10, gap = 5 }, contents)
+  end
+
+  local activity = githubActivity(inner, height)
+  if activity == nil then
+    table.insert(contents, ui.label({
+      text = tostring(gh.total) .. " contributions this year",
+      fontSize = 15, fontWeight = "bold", maxLines = 1, color = "on_surface",
+    }))
+    table.insert(contents, ui.label({
+      text = tostring(gh.today) .. " today  ·  " .. tostring(gh.streak) .. " day streak",
+      fontSize = 12, maxLines = 1, color = "on_surface_variant",
+    }))
+    return card({ width = width, flexGrow = 1, padding = 10, gap = 5 }, contents)
+  end
+
+  local palette = noctalia.getConfig("graph_palette")
+  local dark = noctalia.isDarkMode()
+  local key = table.concat({ activity.cell, activity.gap, activity.first, activity.last, tostring(palette), tostring(dark) }, "|")
+  if gridCache == nil or gridKey ~= key then
+    gridCache = buildGrid(activity.cell, activity.gap, activity.first, activity.last, palette, dark)
+    gridKey = key
+  end
+
+  local count = activity.last - activity.first + 1
+  local period = activity.first == 1 and activity.last == #gh.weeks and "Past year"
+    or ("Last " .. count .. " weeks")
+  if activity.page > 0 then
+    local a, b = gh.weeks[activity.first], gh.weeks[activity.last]
+    for _, day in ipairs(a) do
+      if day.l >= 0 then
+        period = os.date("%b %d", dateToTime(day.d))
+        break
       end
-      table.insert(legend, ui.label({ text = "More", fontSize = 10, color = "on_surface_variant" }))
-      stats = ui.column({ gap = 6 }, { stats, ui.row({ gap = 3, align = "center" }, legend) })
-    elseif inner < 380 then
-      local first, second = {}, {}
-      for i, item in ipairs(statsRow) do
-        table.insert(i <= 3 and first or second, item)
+    end
+    for i = #b, 1, -1 do
+      if b[i].l >= 0 then
+        period = period .. " – " .. os.date("%b %d", dateToTime(b[i].d))
+        break
       end
-      stats = ui.column({ gap = 6 }, {
-        ui.row({ gap = 8, align = "end" }, first),
-        ui.row({ gap = 8, align = "end" }, second),
+    end
+  end
+  local detail = period
+  if hoverDay ~= nil then
+    detail = os.date("%a, %b %d", dateToTime(hoverDay.d)) .. " · " .. hoverDay.c
+      .. (hoverDay.c == 1 and " contribution" or " contributions")
+  end
+  local labels = { ui.label({ text = detail, fontSize = 12, color = "on_surface_variant", maxLines = 1, flexGrow = 1 }) }
+  if inner >= 420 then
+    local legend = { ui.label({ text = "Less", fontSize = 10, color = "on_surface_variant" }) }
+    for l = 0, 4 do
+      table.insert(legend, ui.box({ width = 9, height = 9, radius = 2, fill = levelColor(l, palette, dark) }))
+    end
+    table.insert(legend, ui.label({ text = "More", fontSize = 10, color = "on_surface_variant" }))
+    table.insert(labels, ui.row({ gap = 3, align = "center" }, legend))
+  end
+  table.insert(contents, ui.row({ align = "center", gap = 8 }, labels))
+  table.insert(contents, gridCache)
+
+  if expanded and activity.lastPage > 0 then
+    local function pageButton(text, direction, enabled)
+      return ui.button({
+        text = text, variant = "ghost", controlSize = "sm", enabled = enabled,
+        onClick = function()
+          githubPage = math.clamp(activity.page + direction, 0, activity.lastPage)
+          hoverDay = nil
+          update()
+        end,
       })
     end
-    body = ui.column({ gap = 8 }, { gridCache, stats })
+    table.insert(contents, ui.row({ gap = 6 }, {
+      pageButton("Older", 1, activity.page < activity.lastPage),
+      pageButton("Newer", -1, activity.page > 0),
+    }))
   end
-  local right = nil
-  if hoverDay ~= nil then
-    right = hoverDay.c .. (hoverDay.c == 1 and " contribution" or " contributions") .. " · " .. os.date("%a, %b %d", dateToTime(hoverDay.d))
-  elseif gh ~= nil and gh.ok == true then
-    right = gh.total .. " contributions · past year"
+
+  if activity.stats then
+    local stats = {
+      stat(tostring(gh.total), "past year"),
+      stat(tostring(gh.streak) .. "d", "streak"),
+    }
+    if inner >= 280 then
+      table.insert(stats, stat(tostring(gh.today), "today"))
+    end
+    if inner >= 365 then
+      table.insert(stats, stat(tostring(gh.best) .. "d", "longest"))
+      table.insert(stats, stat(tostring(gh.maxDay), "best day"))
+    end
+    if inner >= 475 and ghCommits ~= nil and ghCommits.ok == true and ghCommits.user == user then
+      table.insert(stats, stat(tostring(ghCommits.n), "commits · " .. ghCommits.year))
+    end
+    table.insert(contents, ui.row({ gap = inner >= 440 and 16 or 9, align = "end" }, stats))
   end
-  local title = "GitHub"
-  if inner >= 440 then
-    title = title .. " · " .. tostring(noctalia.getConfig("github_user"))
-  end
-  local detail = right and ui.label({ text = right, fontSize = 12, color = "on_surface_variant", maxLines = 1 }) or nil
-  return card({ width = cardWidth, padding = 14, gap = 8, flexGrow = 1 }, {
-    sectionTitle("brand-github", title, nil, ghRefreshButton(), "github"),
-    detail or body,
-    detail and body or nil,
-  })
+  return card({ width = width, flexGrow = 1, padding = 12, gap = 6 }, contents)
 end
 
 ------------------------------------------------------------------ agenda (grouped by day)
@@ -1488,17 +1562,7 @@ end
 
 local function gridCard(id, w, h)
   if id == "github" then
-    if w < 315 or h < 223 then
-      local count = gh and gh.ok and (tostring(gh.total) .. " contributions") or "GitHub activity"
-      local detail = gh and gh.ok and (tostring(gh.streak) .. " day streak") or nil
-      return summaryCard(id, count, detail)
-    end
-    local inner = w - 28
-    local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
-    local gap = inner < 390 and 1 or 2
-    local cap = compactGraph() and 8 or 13
-    local cell = math.max(1, math.min(cap, math.floor((inner + gap) / weeks) - gap, math.floor((h - 152) / 7) - gap))
-    return githubCard(inner, cell, gap, w)
+    return githubCard(w, h)
   elseif id == "screen" then
     if w < 256 or h < 278 then
       local value = screen and screen.ok and fmtDur(screen.sec) or "No data yet"
@@ -1652,9 +1716,7 @@ function update()
   elseif maximizedCard == "system" then
     body = systemCard()
   elseif maximizedCard == "github" then
-    local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
-    local cell = math.max(1, math.min(16, math.floor((width - 25) / weeks) - 3))
-    body = githubCard(width - 28, cell, 3, width)
+    body = githubCard(width, height)
   else
     body = gridLayout(monitor, width, height)
   end
