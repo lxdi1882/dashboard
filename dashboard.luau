@@ -954,7 +954,7 @@ local function axisRow(bars, width, gap, step)
         maxLines = 1,
       }))
     end
-    table.insert(cells, ui.column({ key = "ax" .. i, width = segW, gap = 2, align = "start", clip = true }, lines))
+    table.insert(cells, ui.column({ key = "ax" .. i, width = segW, gap = 4, align = "start", clip = true }, lines))
   end
   return ui.row({ gap = gap, align = "start" }, cells)
 end
@@ -1111,7 +1111,8 @@ local function screenCard(innerW)
 
     -- 4. chart + aligned axis
     if #bars > 0 then
-      local inset = 4
+      local inset = screenFocus and 14 or 8
+      local labelGap = screenFocus and 12 or 8
       local plotWidth = math.max(1, innerW - inset * 2)
       local gap = plotWidth < 240 and 2 or ((#bars > 14) and 3 or 4)
       local width = math.max(1, math.min(48, math.floor((plotWidth - (#bars - 1) * gap) / #bars)))
@@ -1140,9 +1141,10 @@ local function screenCard(innerW)
         step = 2
       end
       chartIndex = #rows + 1
-      table.insert(rows, ui.column({ gap = 5, paddingH = inset, paddingV = 2, align = "start" }, {
+      table.insert(rows, ui.column({ paddingH = inset, paddingV = 7, align = "start" }, {
         ui.row({ width = axisWidth, gap = gap, align = "end" }, cols),
         ui.box({ width = axisWidth, height = 1, fill = "outline_variant/0.5" }),
+        ui.box({ key = "axis-label-gap", width = 1, height = labelGap, fill = "surface/0" }),
         axisRow(bars, width, gap, step),
       }))
     elseif detailDay ~= nil then
@@ -1982,10 +1984,10 @@ function update()
     local sidebarWidth = width >= 900 and height >= 460 and math.floor((width - 34) * 0.35) or nil
     HERO_FS = short and 26 or 32
     if sidebarWidth ~= nil then
-      CHART_H = math.clamp(height - 270, 80, 390)
+      CHART_H = math.clamp(height - 286, 80, 374)
       body = cachedScreenCard(width - 58 - sidebarWidth, sidebarWidth)
     else
-      CHART_H = math.clamp(math.floor((height - 216) * 0.40), 26, 105)
+      CHART_H = math.clamp(math.floor((height - 230) * 0.40), 26, 100)
       body = cachedScreenCard(width - 24)
     end
   elseif maximizedCard == "calendar" then
