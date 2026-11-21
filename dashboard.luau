@@ -5,6 +5,16 @@ noctalia.setUpdateInterval(1000)
 noctalia.log("dashboard layer started")
 
 local Todo = require("./lib/todo.luau")
+local Layout = require("./lib/layout.luau")
+
+local function compactGraph()
+  return noctalia.getConfig("graph_size") == "compact"
+end
+
+local savedLayout = Layout.load(compactGraph())
+local draftLayout = nil
+local draftUsesDefault = false
+local layoutSaveFailed = false
 
 ------------------------------------------------------------------ shared state
 
@@ -1332,7 +1342,24 @@ local function header()
 end
 
 local function footer()
-  return ui.row({ gap = 8, align = "center" }, {
+  local editButton
+  if maximizedCard == nil then
+    editButton = ui.button({
+      key = "edit-layout",
+      text = "Edit layout",
+      glyph = "layout-dashboard",
+      variant = "ghost",
+      controlSize = "sm",
+      onClick = function()
+        draftUsesDefault = savedLayout == nil
+        draftLayout = savedLayout and Layout.copy(savedLayout, compactGraph()) or Layout.defaults(compactGraph())
+        layoutSaveFailed = false
+        screenHover = nil
+        update()
+      end,
+    })
+  end
+  local actions = {
     ui.button({
       text = "GitHub profile",
       glyph = "brand-github",
@@ -1341,8 +1368,106 @@ local function footer()
       onClick = function() openUrl("https://github.com/" .. tostring(noctalia.getConfig("github_user"))) end,
     }),
     ui.spacer({ flexGrow = 1 }),
-    ui.button({ text = "Refresh", glyph = "refresh", variant = "ghost", controlSize = "sm", onClick = refresh }),
+  }
+  if editButton ~= nil then
+    table.insert(actions, editButton)
+  end
+  table.insert(actions, ui.button({ text = "Refresh", glyph = "refresh", variant = "ghost", controlSize = "sm", onClick = refresh }))
+  return ui.row({ gap = 8, align = "center" }, actions)
+end
+
+local CARD_NAMES = { github = "GitHub", calendar = "Calendar", screen = "Screen time", todo = "To do", system = "System" }
+
+local function layoutAction(id, text, glyph, enabled, onClick)
+  return ui.button({
+    key = id, text = text, glyph = glyph, enabled = enabled,
+    variant = "ghost", controlSize = "sm", onClick = onClick,
   })
+end
+
+local function layoutEditorColumn(side)
+  local cards = draftLayout[side]
+  local other = side == "left" and "right" or "left"
+  local rows = {
+    ui.label({ text = side == "left" and "Left column" or "Right column", fontSize = 15, fontWeight = "bold" }),
+  }
+  for i, id in ipairs(cards) do
+    local hidden = draftLayout.hidden[id] == true
+    local function change(action)
+      action()
+      draftUsesDefault = false
+      layoutSaveFailed = false
+      update()
+    end
+    table.insert(rows, ui.row({ key = "layout-row-" .. id, gap = 6, align = "center" }, {
+      ui.label({ text = CARD_NAMES[id], flexGrow = 1, color = hidden and "on_surface_variant" or "on_surface", maxLines = 1 }),
+      layoutAction("up-" .. id, nil, "arrow-up", i > 1, function()
+        if i > 1 then
+          change(function() cards[i - 1], cards[i] = cards[i], cards[i - 1] end)
+        end
+      end),
+      layoutAction("down-" .. id, nil, "arrow-down", i < #cards, function()
+        if i < #cards then
+          change(function() cards[i + 1], cards[i] = cards[i], cards[i + 1] end)
+        end
+      end),
+      layoutAction("move-" .. id, nil, side == "left" and "arrow-right" or "arrow-left", true, function()
+        change(function()
+          table.insert(draftLayout[other], table.remove(cards, i))
+        end)
+      end),
+      layoutAction("hide-" .. id, hidden and "Show" or "Hide", nil, true, function()
+        change(function()
+          draftLayout.hidden[id] = not hidden or nil
+        end)
+      end),
+    }))
+  end
+  if #cards == 0 then
+    table.insert(rows, ui.label({ text = "No cards in this column", fontSize = 12, color = "on_surface_variant" }))
+  end
+  return card({ flexGrow = 1 }, rows)
+end
+
+local function layoutEditor(gap)
+  local actions = {
+    layoutAction("reset-layout", "Reset to default", nil, true, function()
+      draftLayout = Layout.defaults(compactGraph())
+      draftUsesDefault = true
+      layoutSaveFailed = false
+      update()
+    end),
+    ui.spacer({ flexGrow = 1 }),
+    layoutAction("cancel-layout", "Cancel", nil, true, function()
+      draftLayout = nil
+      update()
+    end),
+    ui.button({
+      key = "save-layout", text = "Save", variant = "primary", controlSize = "sm",
+      onClick = function()
+        local nextLayout = nil
+        if not draftUsesDefault then
+          nextLayout = draftLayout
+        end
+        if Layout.save(nextLayout) then
+          savedLayout = nextLayout
+          draftLayout = nil
+        else
+          layoutSaveFailed = true
+        end
+        update()
+      end,
+    }),
+  }
+  local kids = {
+    sectionTitle("layout-dashboard", "Edit layout"),
+    ui.row({ gap = gap, flexGrow = 1 }, { layoutEditorColumn("left"), layoutEditorColumn("right") }),
+  }
+  if layoutSaveFailed then
+    table.insert(kids, ui.label({ text = "Could not save the layout. Try again or cancel.", color = "error", fontSize = 12 }))
+  end
+  table.insert(kids, ui.row({ gap = 8, align = "center" }, actions))
+  return card({ flexGrow = 1 }, kids)
 end
 
 ------------------------------------------------------------------ layout
@@ -1457,6 +1582,60 @@ local function defaultLayout(leftW, rightW, todoTextW, screenInnerW, short, colG
   return ui.row({ gap = colGap, flexGrow = 1 }, { left, right })
 end
 
+local function customCard(id, width, availableHeight)
+  if id == "github" then
+    local inner = width - 28
+    local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
+    local gap = inner < 390 and 1 or 2
+    local cell = math.max(2, math.min(13, math.floor((inner + gap) / weeks) - gap))
+    return githubCard(inner, cell, gap, width)
+  elseif id == "system" then
+    return systemCard()
+  end
+  local node, height
+  if id == "calendar" then
+    node = cachedAgendaCard()
+    height = 280
+  elseif id == "screen" then
+    node = cachedScreenCard(width - 32)
+    height = CHART_H + 300
+  else
+    node = cachedTodoCard(width - 146)
+    height = 300
+  end
+  return ui.column({ height = math.max(height, availableHeight) }, { node })
+end
+
+local function customLayout(width, height, gap)
+  local function visibleIds(side)
+    local ids = {}
+    for _, id in ipairs(savedLayout[side]) do
+      if not savedLayout.hidden[id] then
+        table.insert(ids, id)
+      end
+    end
+    return ids
+  end
+  local left, right = visibleIds("left"), visibleIds("right")
+  if #left + #right == 0 then
+    return card({ flexGrow = 1 }, {
+      ui.label({ text = "All cards are hidden. Use Edit layout to show them.", color = "on_surface_variant", fontSize = 13 }),
+    })
+  end
+  local columnWidth = (#left == 0 or #right == 0) and width or math.floor((width - gap) / 2)
+  local cols = {}
+  for _, ids in ipairs({ left, right }) do
+    if #ids > 0 then
+      local nodes = {}
+      for _, id in ipairs(ids) do
+        table.insert(nodes, customCard(id, columnWidth, #ids == 1 and height or 0))
+      end
+      table.insert(cols, ui.scroll({ flexGrow = 1, width = columnWidth, gap = gap }, nodes))
+    end
+  end
+  return ui.row({ flexGrow = 1, gap = gap }, cols)
+end
+
 function update()
   local g = outputGeometry()
   local scale = (g ~= nil and g.scale ~= nil and g.scale > 0) and g.scale or 1
@@ -1487,7 +1666,9 @@ function update()
   local screenInnerW = math.floor((leftW - colGap) / 2) - 32
 
   local body
-  if maximizedCard == "screen" then
+  if draftLayout ~= nil then
+    body = layoutEditor(colGap)
+  elseif maximizedCard == "screen" then
     CHART_H = short and 84 or 124
     HERO_FS = 32
     body = cachedScreenCard(usable + colGap - 32)
@@ -1502,6 +1683,8 @@ function update()
     local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
     local cell = math.max(4, math.min(16, math.floor((width - 28) / weeks) - 3))
     body = githubCard(width - 28, cell, 3, width)
+  elseif savedLayout ~= nil then
+    body = customLayout(usable + colGap, cardH - (short and 147 or 173), colGap)
   else
     body = defaultLayout(leftW, rightW, todoTextW, screenInnerW, short, colGap)
   end
@@ -1510,8 +1693,10 @@ function update()
     header(),
     ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
     body,
-    footer(),
   }
+  if draftLayout == nil then
+    table.insert(kids, footer())
+  end
   layoutCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids }
   renderLayout(animProgress())
 end
