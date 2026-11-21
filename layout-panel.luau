@@ -108,9 +108,12 @@ end
 
 local function tile(id, width)
   local info = Grid.cards[id]
+  local active = resizing ~= nil and resizing.id == id
+  local color = active and (resizing.problem == nil and "primary" or "error") or "outline_variant"
   return ui.column({
-    flexGrow = 1, padding = 3, fill = "surface_container_high", radius = 6, border = "outline_variant", borderWidth = 1,
-    opacity = resizing ~= nil and resizing.id == id and 0.45 or 1,
+    flexGrow = 1, padding = 3, fill = "surface_container_high", radius = 6,
+    border = color, borderWidth = active and 2 or 1,
+    opacity = resizing ~= nil and not active and 0.58 or 1,
   }, {
     ui.row({ gap = 4, align = "center" }, {
       drag(id, "move", { ui.glyph({ name = "menu-2", size = 14, color = "primary" }) }, 22),
@@ -157,23 +160,23 @@ end
 local function canvas()
   local nodes = resizing == nil and table.clone(dropRows) or { ui.box({ height = previewH, width = 1, fill = "surface/0" }) }
   local backgroundRows = #nodes
+  local function showTile(id, r)
+    local x, y, w, h = Grid.pixels(r, previewW, previewH, 0)
+    local offset = #nodes - backgroundRows
+    table.insert(nodes, Grid.place(id, x, y - previewH - offset, w - 4, h - 4, tile(id, w - 4)))
+  end
   for _, id in ipairs(Grid.ids) do
-    if draft[id] ~= nil then
-      local x, y, w, h = Grid.pixels(draft[id], previewW, previewH, 0)
-      local offset = #nodes - Grid.rows
-      table.insert(nodes, Grid.place(id, x, y - previewH - offset, w - 4, h - 4, tile(id, w - 4)))
+    if draft[id] ~= nil and (resizing == nil or resizing.id ~= id) then
+      showTile(id, draft[id])
     end
   end
   if resizing ~= nil then
     local r = resizing.rect
-    local x, y, w, h = Grid.pixels(r, previewW, previewH, 0)
-    local offset = #nodes - backgroundRows
-    local color = resizing.problem == nil and "primary" or "error"
-    if w > 4 and h > 4 then
-      table.insert(nodes, Grid.place("resize-outline", x, y - previewH - offset, w - 4, h - 4,
-        ui.column({ flexGrow = 1, radius = 6, border = color, borderWidth = 2, fill = color .. "/0.20" }, {})))
-      offset = offset + 1
+    if r.w < 1 or r.h < 1 then
+      r = draft[resizing.id]
     end
+    showTile(resizing.id, r)
+    local offset = #nodes - backgroundRows
     table.insert(nodes, Grid.place("resize-input", 0, -previewH - offset, previewW, previewH,
       ui.column({ flexGrow = 1 }, resizeRows)))
   end
