@@ -1309,7 +1309,7 @@ local function screenCard(innerW)
   }
 end
 
-local function screenHighlights()
+local function screenHighlights(width)
   local periods = screen.highlights
   if periods == nil or periods[highlightPeriod] == nil then
     return {}
@@ -1328,30 +1328,49 @@ local function screenHighlights()
     }))
   end
   local rows = {
-    sectionTitle("chart-bar", "Usage highlights", report.total > 0 and (fmtDur(report.total) .. " total") or nil),
+    sectionTitle("chart-bar", "Usage highlights"),
     ui.row({ gap = 4, align = "center" }, buttons),
   }
-  for i, item in ipairs(report.items or {}) do
-    local domain = item.domain
-    local icon = item.icon ~= nil and item.icon ~= ""
-      and ui.image({ path = item.icon, width = 16, height = 16, fit = "contain" })
-      or ui.glyph({ name = domain and "world" or "app-window", size = 16, color = "on_surface_variant" })
-    local share = math.floor(100 * item.sec / math.max(1, report.total) + 0.5)
-    table.insert(rows, ui.row({
-      key = "highlight-" .. item.id, gap = 7, align = "center", paddingH = 6, paddingV = 3,
-      radius = 6, fill = "surface_container_high",
-      onClick = domain and function() openScreenSite(domain) end or nil,
-    }, {
-      ui.label({ text = tostring(i), minWidth = 12, fontSize = 11, color = "on_surface_variant" }),
-      icon,
-      ui.label({ text = item.name, maxLines = 1, flexGrow = 1, fontSize = 12, color = "on_surface" }),
-      ui.label({ text = fmtDur(item.sec) .. " · " .. share .. "%", fontSize = 12, color = "on_surface_variant" }),
-      domain and ui.glyph({ name = "chevron-right", size = 12, color = "on_surface_variant" }) or nil,
-    }))
+  local items = report.items or {}
+  local leader = items[1]
+  if leader == nil or report.total <= 0 then
+    table.insert(rows, ui.label({ text = "No screen time recorded for this period.", fontSize = 12, color = "on_surface_variant" }))
+    return rows
   end
-  if report.items == nil or #report.items == 0 then
-    table.insert(rows, ui.label({ text = "No recorded activity", fontSize = 12, color = "on_surface_variant" }))
+
+  local period = ({ "today", "over the last 7 days", "over the last 14 days" })[highlightPeriod]
+  local share = math.floor(100 * leader.sec / report.total + 0.5)
+  local story = string.format("You spent %s on it, about %d%% of your %s total.", fmtDur(leader.sec), share, fmtDur(report.total))
+  for i = 2, #items do
+    local item = items[i]
+    local byline = item.name .. " (" .. fmtDur(item.sec) .. ")"
+    story = story .. (i == 2 and " " or " and ") .. byline
+    if i == #items then
+      story = story .. " followed."
+    end
   end
+
+  local headline = {}
+  if leader.icon ~= nil and leader.icon ~= "" then
+    table.insert(headline, ui.image({ path = leader.icon, width = 17, height = 17, fit = "contain" }))
+  end
+  table.insert(headline, ui.label({
+    key = "usage-headline", text = leader.name .. " led " .. period,
+    fontSize = 16, fontWeight = "bold", maxLines = 2, flexGrow = 1, color = "on_surface",
+  }))
+  if leader.domain ~= nil then
+    table.insert(headline, ui.glyph({ name = "chevron-right", size = 14, color = "on_surface_variant" }))
+  end
+  table.insert(rows, ui.column({ gap = 6, paddingH = 6, paddingV = 5 }, {
+    ui.row({
+      key = "usage-lead", gap = 6, align = "center",
+      onClick = leader.domain and function() openScreenSite(leader.domain) end or nil,
+    }, headline),
+    ui.label({
+      key = "usage-brief", text = story, fontSize = 13, maxLines = 5,
+      maxWidth = math.max(1, width - 12), color = "on_surface_variant",
+    }),
+  }))
   return rows
 end
 
@@ -1482,7 +1501,7 @@ local function renderScreenCard(innerW, model, sidebarWidth)
     return card({ flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 }, children)
   end
 
-  local highlights = screenHighlights()
+  local highlights = screenHighlights(sidebarWidth and (sidebarWidth - 18) or innerW)
   local siteDetail = activeSiteTrend(sidebarWidth and (sidebarWidth - 24) or (innerW - 4))
   if sidebarWidth ~= nil then
     local sidebar = {}
