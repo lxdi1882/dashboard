@@ -535,13 +535,25 @@ local function bar(bucket, maxSec, width, key, selected, onClick, apps, colors)
         usedSeconds = usedSeconds + duration
         local edge = math.floor(height * usedSeconds / total + 0.5)
         if edge > pixels then
-          table.insert(children, ui.box({ width = width, height = edge - pixels, fill = colors[app.id] }))
+          table.insert(children, ui.box({
+            width = width,
+            height = edge - pixels,
+            fill = colors[app.id],
+            tooltip = app.name .. " · " .. fmtDur(duration),
+            onClick = onClick,
+          }))
           pixels = edge
         end
       end
     end
     if pixels < height then
-      table.insert(children, ui.box({ width = width, height = height - pixels, fill = OTHER_COLOR }))
+      table.insert(children, ui.box({
+        width = width,
+        height = height - pixels,
+        fill = OTHER_COLOR,
+        tooltip = "Other apps · " .. fmtDur(total - usedSeconds),
+        onClick = onClick,
+      }))
     end
   end
 
