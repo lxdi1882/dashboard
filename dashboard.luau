@@ -360,7 +360,37 @@ local function githubActivity(width, height)
   return { gap = gap, cell = cell, first = first, last = last, page = page, lastPage = lastPage, stats = showStats }
 end
 
-local function githubCard(width, height)
+local function githubWeeklyTrend()
+  local entries = {}
+  local peak = 1
+  for i = math.max(1, #gh.weeks - 7), #gh.weeks do
+    local count, first = 0, nil
+    for _, day in ipairs(gh.weeks[i]) do
+      if day.l >= 0 then
+        first = first or day.d
+        count = count + day.c
+      end
+    end
+    if first ~= nil then
+      table.insert(entries, { count = count, label = i == #gh.weeks and "This week" or os.date("%b %d", dateToTime(first)) })
+      peak = math.max(peak, count)
+    end
+  end
+  local bars = {}
+  for _, entry in ipairs(entries) do
+    table.insert(bars, ui.column({ flexGrow = 1, gap = 4, align = "center" }, {
+      ui.label({ text = tostring(entry.count), fontSize = 11, maxLines = 1, color = "on_surface_variant" }),
+      ui.box({ width = 20, height = math.max(2, math.floor(58 * entry.count / peak)), radius = 3, fill = "primary/0.65" }),
+      ui.label({ text = entry.label, fontSize = 10, maxLines = 1, color = "on_surface_variant" }),
+    }))
+  end
+  return ui.column({ gap = 7 }, {
+    sectionTitle("chart-bar", "Weekly contributions"),
+    ui.row({ gap = 6, align = "end" }, bars),
+  })
+end
+
+local function githubCard(width, height, embedded)
   local inner = width - 24
   local expanded = maximizedCard == "github"
   if not expanded then
@@ -371,7 +401,8 @@ local function githubCard(width, height)
   if inner >= 360 and user ~= "" then
     caption = "GitHub · " .. tostring(user)
   end
-  local contents = { sectionTitle("brand-github", caption, nil, ghRefreshButton(), "github") }
+  local heading = embedded and sectionTitle("chart-bar", "Contributions") or sectionTitle("brand-github", caption, nil, ghRefreshButton(), "github")
+  local contents = { heading }
   if gh == nil or gh.ok ~= true then
     table.insert(contents, ui.label({
       text = gh == nil and "Loading contributions…" or "Couldn’t load contributions. Retrying soon.",
@@ -459,19 +490,97 @@ local function githubCard(width, height)
       stat(tostring(gh.total), "past year"),
       stat(tostring(gh.streak) .. "d", "streak"),
     }
-    if inner >= 280 then
+    if embedded and gh.recentWeek ~= nil then
+      table.insert(stats, stat(tostring(gh.recentWeek), "last 7 days"))
+      if inner >= 310 then
+        table.insert(stats, stat(tostring(gh.activeDays) .. "/30", "active days"))
+      end
+      if inner >= 420 then
+        table.insert(stats, stat(tostring(gh.recentMonth), "last 30 days"))
+      end
+    elseif inner >= 280 then
       table.insert(stats, stat(tostring(gh.today), "today"))
     end
-    if inner >= 365 then
+    if inner >= (embedded and 590 or 365) then
       table.insert(stats, stat(tostring(gh.best) .. "d", "longest"))
       table.insert(stats, stat(tostring(gh.maxDay), "best day"))
     end
-    if inner >= 475 and ghCommits ~= nil and ghCommits.ok == true and ghCommits.user == user then
+    if not embedded and inner >= 475 and ghCommits ~= nil and ghCommits.ok == true and ghCommits.user == user then
       table.insert(stats, stat(tostring(ghCommits.n), "commits · " .. ghCommits.year))
     end
     table.insert(contents, ui.row({ gap = inner >= 440 and 16 or 9, align = "end" }, stats))
   end
+  if embedded and height >= 423 and inner >= 500 then
+    table.insert(contents, ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 4 }))
+    table.insert(contents, githubWeeklyTrend())
+  end
   return card({ width = width, flexGrow = 1, padding = 12, gap = 6 }, contents)
+end
+
+local function githubCommitsCard(width, user)
+  local current = ghCommits and ghCommits.user == user and ghCommits.year == os.date("%Y") and ghCommits or nil
+  local items = current and current.items or {}
+  local caption = current and current.ok and (tostring(current.n) .. " in " .. current.year) or nil
+  local rows = {}
+  if #items == 0 then
+    local message
+    if user == "" then
+      message = "Set a GitHub username to see recent commits."
+    elseif current == nil then
+      message = "Loading recent commits…"
+    elseif not current.ok then
+      message = "GitHub couldn’t load recent commits. Try refreshing."
+    else
+      message = "No public commits found this year."
+    end
+    table.insert(rows, ui.label({ text = message, fontSize = 12, maxLines = 2, color = "on_surface_variant" }))
+  end
+
+  for _, commit in ipairs(items) do
+    local date = commit.date ~= "" and os.date("%b %d", dateToTime(commit.date)) or ""
+    table.insert(rows, ui.row({
+      key = commit.url, gap = 8, paddingH = 8, paddingV = 5, radius = 8, align = "center",
+      fill = "surface_container_high", onClick = function() openUrl(commit.url) end,
+    }, {
+      ui.glyph({ name = "git-commit", size = 16, color = "primary" }),
+      ui.column({ gap = 2, flexGrow = 1 }, {
+        ui.label({ text = commit.title, maxWidth = width - 72, maxLines = 1, fontSize = 13, color = "on_surface" }),
+        ui.label({ text = commit.repo .. (date ~= "" and (" · " .. date) or ""), maxWidth = width - 72, maxLines = 1,
+          fontSize = 11, color = "on_surface_variant" }),
+      }),
+      ui.glyph({ name = "external-link", size = 13, color = "on_surface_variant" }),
+    }))
+  end
+  return card({ flexGrow = 1, padding = 10, gap = 6 }, {
+    sectionTitle("git-commit", "Recent public commits", caption),
+    ui.scroll({ flexGrow = 1, gap = 5 }, rows),
+  })
+end
+
+local function githubDetails(width, height)
+  local user = noctalia.getConfig("github_user") or ""
+  local inner = width - 24
+  local sideBySide = inner >= 1110 and height >= 370
+  local body
+  if sideBySide then
+    local activityWidth = math.floor((inner - 10) * 0.64)
+    local commitsWidth = inner - 10 - activityWidth
+    body = ui.row({ flexGrow = 1, gap = 10 }, {
+      ui.column({ width = activityWidth }, { githubCard(activityWidth, height - 54, true) }),
+      ui.column({ width = commitsWidth }, { githubCommitsCard(commitsWidth, user) }),
+    })
+  else
+    local activityHeight = height >= 330 and math.clamp(math.floor((height - 54) * 0.53), 198, 245)
+      or math.floor(math.max(0, height - 54) * 0.45)
+    body = ui.column({ flexGrow = 1, gap = 8 }, {
+      ui.column({ height = activityHeight, clip = true }, { githubCard(inner, activityHeight, true) }),
+      githubCommitsCard(inner, user),
+    })
+  end
+  return card({ width = width, flexGrow = 1, padding = 12, gap = 8 }, {
+    sectionTitle("brand-github", user ~= "" and ("GitHub · " .. user) or "GitHub", nil, ghRefreshButton(), "github"),
+    body,
+  })
 end
 
 ------------------------------------------------------------------ agenda (grouped by day)
@@ -1716,7 +1825,7 @@ function update()
   elseif maximizedCard == "system" then
     body = systemCard()
   elseif maximizedCard == "github" then
-    body = githubCard(width, height)
+    body = githubDetails(width, height)
   else
     body = gridLayout(monitor, width, height)
   end

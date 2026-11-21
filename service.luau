@@ -257,9 +257,19 @@ local function publishGithub(list, user, total)
     i = i - 1
   end
 
-  local sum = 0
-  for _, c in ipairs(list) do
-    sum = sum + (c.count or 0)
+  local sum, recentWeek, recentMonth, activeDays = 0, 0, 0, 0
+  for i, c in ipairs(list) do
+    local count = c.count or 0
+    sum = sum + count
+    if i > #list - 30 then
+      recentMonth = recentMonth + count
+      if count > 0 then
+        activeDays = activeDays + 1
+      end
+    end
+    if i > #list - 7 then
+      recentWeek = recentWeek + count
+    end
   end
 
   noctalia.state.set("gh", {
@@ -271,6 +281,9 @@ local function publishGithub(list, user, total)
     best = best,
     maxDay = maxDay,
     today = list[#list].count or 0,
+    recentWeek = recentWeek,
+    recentMonth = recentMonth,
+    activeDays = activeDays,
   })
 end
 
@@ -282,28 +295,65 @@ local function cachePath()
   return dir .. "/github.json"
 end
 
-local function refreshCommits()
-  local user = noctalia.getConfig("github_user")
-  if user == nil or user == "" then
+local commitsPending = nil
+
+local function refreshCommits(user)
+  local year = os.date("%Y")
+  if commitsPending ~= nil and commitsPending.user == user and commitsPending.year == year then
     return
   end
-  local year = os.date("%Y")
+  local request = { user = user, year = year }
+  commitsPending = request
+
+  local function unavailable()
+    local previous = noctalia.state.get("gh_commits")
+    if previous == nil or previous.ok ~= true or previous.user ~= user or previous.year ~= year then
+      noctalia.state.set("gh_commits", { ok = false, user = user, year = year })
+    end
+  end
+
   local q = noctalia.string.urlEncode("author:" .. user .. " author-date:>=" .. year .. "-01-01")
-  noctalia.http({
-    url = "https://api.github.com/search/commits?per_page=1&q=" .. q,
+  local started = noctalia.http({
+    url = "https://api.github.com/search/commits?per_page=8&sort=author-date&order=desc&q=" .. q,
     method = "GET",
     headers = { "Accept: application/vnd.github+json", "User-Agent: noctalia-dashboard" },
     follow_redirects = true,
   }, function(res)
-    if not res.ok or res.status ~= 200 then
+    if commitsPending ~= request then
       return
     end
-    local data = noctalia.json.decode(res.body)
-    if data == nil or type(data.total_count) ~= "number" then
+    commitsPending = nil
+    if noctalia.getConfig("github_user") ~= user or os.date("%Y") ~= year then
       return
     end
-    noctalia.state.set("gh_commits", { ok = true, n = math.floor(data.total_count), year = year, user = user })
+    local data = res.ok and res.status == 200 and noctalia.json.decode(res.body) or nil
+    if type(data) ~= "table" or type(data.total_count) ~= "number" or type(data.items) ~= "table" then
+      unavailable()
+      return
+    end
+    local items = {}
+    for _, result in ipairs(data.items) do
+      if type(result) == "table" and type(result.html_url) == "string"
+          and string.match(result.html_url, "^https://github%.com/[^/]+/[^/]+/commit/%x+$")
+          and type(result.commit) == "table" and type(result.repository) == "table" then
+        local message = result.commit.message
+        local title = type(message) == "string" and string.match(message, "^[^\r\n]+")
+        local author = result.commit.author
+        local date = type(author) == "table" and author.date
+        table.insert(items, {
+          title = title or "Untitled commit",
+          repo = type(result.repository.full_name) == "string" and result.repository.full_name or "",
+          date = type(date) == "string" and string.match(date, "^%d%d%d%d%-%d%d%-%d%d") or "",
+          url = result.html_url,
+        })
+      end
+    end
+    noctalia.state.set("gh_commits", { ok = true, n = math.floor(data.total_count), year = year, user = user, items = items })
   end)
+  if not started and commitsPending == request then
+    commitsPending = nil
+    unavailable()
+  end
 end
 
 local function refreshGithubApi()
@@ -341,7 +391,6 @@ local function refreshGithubApi()
     end
     publishGithub(data.contributions, user, total)
     noctalia.state.set("gh_done", noctalia.nowMs())
-    refreshCommits()
     local p = cachePath()
     if p ~= nil then
       noctalia.writeFile(p, noctalia.json.encode({ user = user, total = total, contributions = data.contributions }))
@@ -359,6 +408,7 @@ local function refreshGithub()
   if user == nil or user == "" or ghBusy then
     return
   end
+  refreshCommits(user)
   local dir = noctalia.pluginDir()
   if dir == nil or not noctalia.commandExists("python3") then
     refreshGithubApi()
@@ -381,7 +431,6 @@ local function refreshGithub()
     if p ~= nil then
       noctalia.writeFile(p, noctalia.json.encode({ user = user, total = data.total, contributions = data.contributions }))
     end
-    refreshCommits()
   end)
   if not started then
     ghBusy = false
