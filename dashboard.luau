@@ -485,20 +485,70 @@ local CHART_H = 84
 local AVATAR = 68
 local HERO_FS = 28
 
--- Reserve the solid accent for an explicitly selected bar.
-local function bar(sec, maxSec, width, key, tip, selected, onClick)
-  local h = 2
-  local fill = "surface_container_high"
-  if sec > 0 then
-    h = math.max(3, math.floor(CHART_H * sec / maxSec))
-    fill = "primary/0.40"
+local APP_COLORS = {
+  "#6AA9F5", "#F3AD65", "#64C9A5", "#DB89CE", "#C7C96F", "#9A98ED",
+  "#F4818D", "#6BC3DB", "#DBB895", "#89C475", "#BD9AF4", "#DF8C65",
+}
+local OTHER_COLOR = "outline_variant"
+
+local function screenAppColors(apps)
+  local colors, used = {}, {}
+  for _, app in ipairs(apps) do
+    local hash = 0
+    for i = 1, #app.id do
+      hash = (hash * 31 + string.byte(app.id, i)) % #APP_COLORS
+    end
+    local slot = hash + 1
+    for offset = 0, #APP_COLORS - 1 do
+      local candidate = (hash + offset) % #APP_COLORS + 1
+      if not used[candidate] then
+        slot = candidate
+        break
+      end
+    end
+    colors[app.id] = APP_COLORS[slot]
+    used[slot] = true
   end
+  return colors
+end
+
+local function bar(bucket, maxSec, width, key, selected, onClick, apps, colors)
+  local children = {}
   if selected then
-    fill = "primary"
+    table.insert(children, ui.box({ width = width, height = 2, fill = "on_surface" }))
+    table.insert(children, ui.box({ width = width, height = 2, fill = "surface/0" }))
   end
-  return ui.column({ key = key, width = width, height = CHART_H, justify = "end", tooltip = tip, onClick = onClick }, {
-    ui.box({ width = width, height = h, radius = math.min(4, math.floor(width / 2)), fill = fill }),
-  })
+
+  if bucket.sec <= 0 then
+    table.insert(children, ui.box({ width = width, height = 2, fill = "surface_container_high" }))
+  else
+    local height = math.max(3, math.floor(CHART_H * bucket.sec / maxSec))
+    local seconds = 0
+    for _, duration in pairs(bucket.by) do
+      seconds = seconds + duration
+    end
+    local total = math.max(seconds, bucket.sec)
+    local usedSeconds, pixels = 0, 0
+    for _, app in ipairs(apps) do
+      local duration = bucket.by[app.id] or 0
+      if duration > 0 then
+        usedSeconds = usedSeconds + duration
+        local edge = math.floor(height * usedSeconds / total + 0.5)
+        if edge > pixels then
+          table.insert(children, ui.box({ width = width, height = edge - pixels, fill = colors[app.id] }))
+          pixels = edge
+        end
+      end
+    end
+    if pixels < height then
+      table.insert(children, ui.box({ width = width, height = height - pixels, fill = OTHER_COLOR }))
+    end
+  end
+
+  return ui.column({
+    key = key, width = width, height = CHART_H + 4, justify = "end",
+    tooltip = bucket.tip, onClick = onClick,
+  }, children)
 end
 
 local function rangeSum(n)
@@ -598,6 +648,7 @@ local function screenCard(innerW)
       table.insert(rows, ui.label({ text = tostring(screen.sample or ""), fontSize = 10, color = "on_surface", maxLines = 8, maxWidth = innerW }))
     end
   else
+    local colors = screenAppColors(screen.apps)
     local range = RANGES[1]
     for _, r in ipairs(RANGES) do
       if r.k == screenRange then
@@ -743,7 +794,7 @@ local function screenCard(innerW)
           end
           update()
         end
-        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, b == selectedBar, selectBar))
+        table.insert(cols, bar(b, maxSec, width, "sb" .. i, b == selectedBar, selectBar, screen.apps, colors))
       end
       local step = 1
       if hourly then
@@ -762,7 +813,7 @@ local function screenCard(innerW)
       table.insert(rows, screenMessage("No activity recorded for this range yet.", innerW))
     end
 
-    -- 5. most used (top 5)
+    -- 5. app list with matching chart colors
     local list = {}
     otherSec = sums["_other"] or 0
     if selectedBar ~= nil then
@@ -798,6 +849,7 @@ local function screenCard(innerW)
           lead,
           ui.column({ gap = 4, flexGrow = 1 }, {
             ui.row({ align = "center", gap = 6 }, {
+              ui.box({ width = 8, height = 8, radius = 4, fill = colors[e.a.id] }),
               ui.label({ text = e.a.name, fontSize = 12, color = "on_surface", maxLines = 1, flexGrow = 1 }),
               ui.label({ text = fmtDur(e.sec) .. (screenFocus and ("  ·  " .. string.format("%d%%", math.floor(100 * e.sec / math.max(total, 1) + 0.5))) or ""), fontSize = 12, fontWeight = "bold", color = "on_surface" }),
             }),
@@ -805,6 +857,13 @@ local function screenCard(innerW)
           }),
         }))
       end
+    end
+    if otherSec > 0 then
+      table.insert(listRows, ui.row({ gap = 6, align = "center" }, {
+        ui.box({ width = 8, height = 8, radius = 4, fill = OTHER_COLOR }),
+        ui.label({ text = "Other apps", fontSize = 12, color = "on_surface_variant", flexGrow = 1 }),
+        ui.label({ text = fmtDur(otherSec), fontSize = 12, color = "on_surface_variant" }),
+      }))
     end
   end
 
