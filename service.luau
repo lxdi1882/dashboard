@@ -512,16 +512,18 @@ function update()
   if visible and closeAskedAt > 0 and noctalia.nowMs() - closeAskedAt > 2500 then
     setVisible(false)
   end
-  refreshUptime()
-  if tick % 3 == 1 then
-    refreshTodo()
-  end
-  -- screen time is the heavy one: only while the dashboard is open, about every 30s
-  if tick % 6 == 2 and visible then
-    refreshScreenTime()
-  end
-  if tick % 6 == 1 then
-    refreshCalendar()
+  -- Opening refreshes local data immediately, so idle ticks can skip these reads.
+  if visible then
+    refreshUptime()
+    if tick % 3 == 1 then
+      refreshTodo()
+    end
+    if tick % 6 == 2 then
+      refreshScreenTime()
+    end
+    if tick % 6 == 1 then
+      refreshCalendar()
+    end
   end
   local now = noctalia.nowMs()
   if now - lastGithub > 30 * 60000 then

@@ -850,6 +850,7 @@ end
 local GOV_DIR = "/sys/devices/system/cpu/cpu0/cpufreq/"
 local govList = nil
 local govCurrent = nil
+local nextGovernorRead = 0
 local GOV_TIPS = {
   performance = "Max clock speed, most power use",
   powersave = "Lowest clock speed, saves power",
@@ -882,6 +883,7 @@ local function setGovernor(g)
   govCurrent = g
   noctalia.runAsync({ "sudo", "-n", "/usr/local/bin/set-governor", g }, function(result)
     govCurrent = readGovernor()
+    nextGovernorRead = noctalia.nowMs() + 5000
     if result.exitCode ~= 0 then
       noctalia.notifyError("Dashboard", "Could not set governor: " .. tostring(result.stderr))
     end
@@ -897,7 +899,11 @@ local function governorRow()
   if #govList == 0 then
     return nil
   end
-  govCurrent = readGovernor() or govCurrent
+  local now = noctalia.nowMs()
+  if now >= nextGovernorRead then
+    govCurrent = readGovernor() or govCurrent
+    nextGovernorRead = now + 5000
+  end
   local lines = {}
   for first = 1, #govList, 3 do
     local pills = {}
@@ -935,6 +941,9 @@ local function governorRow()
   })
 end
 
+local disk
+local nextDiskRead = 0
+
 local function systemCard()
   local stats = noctalia.systemStats()
   local rows = {}
@@ -948,7 +957,11 @@ local function systemCard()
   else
     table.insert(rows, meter("CPU", stats.cpu.usagePercent))
     table.insert(rows, meter("RAM", stats.ram.usagePercent))
-    local disk = noctalia.diskStats("/")
+    local now = noctalia.nowMs()
+    if now >= nextDiskRead then
+      disk = noctalia.diskStats("/")
+      nextDiskRead = now + 10000
+    end
     if disk ~= nil then
       table.insert(rows, meter("Disk", disk.usagePercent))
     end
