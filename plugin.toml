@@ -1,7 +1,7 @@
 id          = "lat/dashboard"
 name        = "Dashboard"
 version     = "1.0.0"
-plugin_api  = 43
+plugin_api  = 52
 author      = "lat"
 license     = "MIT"
 icon        = "layout-dashboard"
@@ -74,8 +74,8 @@ entry = "service.luau"
 [[panel]]
 id        = "layout"
 entry     = "layout-panel.luau"
-width     = 590
-height    = 390
+width     = 780
+height    = 500
 placement = "floating"
 position  = "center"
 layer     = "overlay"
