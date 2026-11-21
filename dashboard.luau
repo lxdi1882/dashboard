@@ -467,7 +467,7 @@ end
 
 
 local screenRange = "today" -- "today" | "3d" | "14d"
-local screenSel = nil -- selected day "YYYY-MM-DD" (3d / 14d views)
+local screenSel = nil -- date for a day, date and hour for an hourly bar
 local screenFocus = false -- apps list expanded to fill the card
 noctalia.state.watch("visible", function(v)
   if not v then
@@ -484,13 +484,16 @@ local CHART_H = 84
 local AVATAR = 68
 local HERO_FS = 28
 
--- one single-colour bar; the peak is solid, everything else is dimmed
-local function bar(sec, maxSec, width, key, tip, isPeak, onClick)
+-- Reserve the solid accent for an explicitly selected bar.
+local function bar(sec, maxSec, width, key, tip, selected, onClick)
   local h = 2
   local fill = "surface_container_high"
   if sec > 0 then
     h = math.max(3, math.floor(CHART_H * sec / maxSec))
-    fill = isPeak and "primary" or "primary/0.40"
+    fill = "primary/0.40"
+  end
+  if selected then
+    fill = "primary"
   end
   return ui.column({ key = key, width = width, height = CHART_H, justify = "end", tooltip = tip, onClick = onClick }, {
     ui.box({ width = width, height = h, radius = math.min(4, math.floor(width / 2)), fill = fill }),
@@ -599,17 +602,6 @@ local function screenCard(innerW)
       end
     end
     local sums, total = rangeSum(range.n)
-    local selDay = nil
-    if range.k ~= "today" and screenSel ~= nil then
-      for i = math.max(1, #screen.days - range.n + 1), #screen.days do
-        if screen.days[i].d == screenSel then
-          selDay = screen.days[i]
-        end
-      end
-      if selDay ~= nil then
-        sums, total = selDay.by, selDay.sec
-      end
-    end
 
     -- 1. control
     table.insert(rows, rangeToggle())
@@ -619,11 +611,16 @@ local function screenCard(innerW)
     local HOUR_LABELS = { [0] = "12 AM", [6] = "6 AM", [12] = "12 PM", [18] = "6 PM" }
     if range.k == "today" then
       if screen.hours ~= nil and #screen.hours == 24 then
+        local today = screen.days[#screen.days].d
         for i, h in ipairs(screen.hours) do
+          local hour = string.format("%02d:00", i - 1)
           table.insert(bars, {
             sec = h.sec,
-            tip = string.format("%02d:00 · %s", i - 1, fmtDur(h.sec)),
-            name = string.format("%02d:00", i - 1),
+            by = h.by or {},
+            tip = hour .. " · " .. fmtDur(h.sec),
+            name = hour,
+            label = string.format("%s–%02d:00", hour, i % 24),
+            key = today .. "T" .. hour,
             top = HOUR_LABELS[i - 1],
           })
         end
@@ -631,11 +628,13 @@ local function screenCard(innerW)
     else
       for i = math.max(1, #screen.days - range.n + 1), #screen.days do
         local d = screen.days[i]
+        local label = d.label .. " " .. string.sub(d.d, 9, 10)
         table.insert(bars, {
           sec = d.sec,
-          tip = d.label .. " " .. string.sub(d.d, 9, 10) .. " · " .. fmtDur(d.sec),
-          name = d.label,
-          date = d.d,
+          by = d.by,
+          tip = label .. " · " .. fmtDur(d.sec),
+          label = label,
+          key = d.d,
           top = tostring(tonumber(string.sub(d.d, 9, 10))),
           sub = d.label,
           today = (i == #screen.days),
@@ -644,11 +643,18 @@ local function screenCard(innerW)
     end
 
     local maxSec, peakIdx = 0, 0
+    local selectedBar = nil
     for i, b in ipairs(bars) do
       if b.sec > maxSec then
         maxSec = b.sec
         peakIdx = i
       end
+      if b.key == screenSel then
+        selectedBar = b
+      end
+    end
+    if selectedBar ~= nil then
+      sums, total = selectedBar.by, selectedBar.sec
     end
 
     -- 3. hero number + one supporting stat
@@ -659,7 +665,7 @@ local function screenCard(innerW)
       statLabel, statValue = "daily avg", fmtDur(total / range.n)
     end
     local heroLabel = "total · " .. string.lower(range.label)
-    if selDay ~= nil then
+    if selectedBar ~= nil then
       local n = 0
       for id, v in pairs(sums) do
         if id ~= "_other" and v > 0 then
@@ -667,7 +673,7 @@ local function screenCard(innerW)
         end
       end
       statLabel, statValue = "apps used", tostring(n)
-      heroLabel = "total · " .. selDay.label .. " " .. string.sub(selDay.d, 9, 10)
+      heroLabel = "total · " .. selectedBar.label
     end
     focusTotal, focusLabel = total, heroLabel
     table.insert(rows, ui.row({ align = "end", gap = 8 }, {
@@ -683,27 +689,20 @@ local function screenCard(innerW)
     }))
 
     -- 4. chart + aligned axis
-    if #bars > 0 and maxSec > 0 then
+    if #bars > 0 then
       local gap = (#bars > 14) and 3 or 4
       local width = math.max(3, math.min(48, math.floor((innerW - (#bars - 1) * gap) / #bars)))
       local cols = {}
       for i, b in ipairs(bars) do
-        local hi = (i == peakIdx)
-        if selDay ~= nil then
-          hi = (b.date == screenSel)
-        end
-        local click = nil
-        if b.date ~= nil then
-          click = function()
-            if screenSel == b.date then
-              screenSel = nil
-            else
-              screenSel = b.date
-            end
-            update()
+        local function toggleSelection()
+          if screenSel == b.key then
+            screenSel = nil
+          else
+            screenSel = b.key
           end
+          update()
         end
-        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, hi, click))
+        table.insert(cols, bar(b.sec, maxSec, width, "sb" .. i, b.tip, b == selectedBar, toggleSelection))
       end
       local step = 1
       if range.k == "today" then
@@ -723,8 +722,8 @@ local function screenCard(innerW)
     -- 5. most used (top 5)
     local list = {}
     otherSec = sums["_other"] or 0
-    if selDay ~= nil then
-      listTitle = selDay.label .. " " .. string.sub(selDay.d, 9, 10) .. " · apps used"
+    if selectedBar ~= nil then
+      listTitle = selectedBar.label .. " · apps used"
     elseif range.k == "today" then
       listTitle = "Apps used today"
     else
