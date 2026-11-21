@@ -1226,6 +1226,42 @@ local function renderLayout(anim)
   }))
 end
 
+local agendaCache, screenCache, todoCache
+
+local function cachedAgendaCard()
+  local today = os.date("%Y-%m-%d")
+  if agendaCache == nil or agendaCache.events ~= events or agendaCache.day ~= today then
+    agendaCache = { events = events, day = today, node = agendaCard() }
+  end
+  return agendaCache.node
+end
+
+local function cachedScreenCard(innerW)
+  if loadingMore then
+    -- The loading indicator and its timeout depend on the clock.
+    screenCache = nil
+    return screenCard(innerW)
+  end
+  local c = screenCache
+  if c == nil or c.screen ~= screen or c.width ~= innerW or c.height ~= CHART_H
+      or c.range ~= screenRange or c.selection ~= screenSel or c.focus ~= screenFocus then
+    screenCache = {
+      screen = screen, width = innerW, height = CHART_H,
+      range = screenRange, selection = screenSel, focus = screenFocus,
+      node = screenCard(innerW),
+    }
+  end
+  return screenCache.node
+end
+
+local function cachedTodoCard(textWidth)
+  if todoCache == nil or todoCache.todo ~= todo or todoCache.width ~= textWidth
+      or todoCache.inputGen ~= inputGen then
+    todoCache = { todo = todo, width = textWidth, inputGen = inputGen, node = todoCard(textWidth) }
+  end
+  return todoCache.node
+end
+
 function update()
   local g = outputGeometry()
   local scale = (g ~= nil and g.scale ~= nil and g.scale > 0) and g.scale or 1
@@ -1255,6 +1291,10 @@ function update()
   local todoTextW = rightW - 32 - 24 - 90
   local screenInnerW = math.floor((leftW - colGap) / 2) - 32
 
+  local agendaNode = cachedAgendaCard()
+  local screenNode = cachedScreenCard(screenInnerW)
+  local todoNode = cachedTodoCard(todoTextW)
+
   -- GitHub graph. "large" (default): card spans the column with big squares, System sits under To-do.
   -- "compact": card hugs a small graph and System sits beside it.
   local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
@@ -1265,18 +1305,18 @@ function update()
     local ghInner = weeks * (cell + ggap) - ggap
     left = ui.column({ gap = colGap, flexGrow = 3 }, {
       ui.row({ gap = colGap, align = "stretch" }, { githubCard(ghInner, cell, ggap, ghInner + 28), systemCard() }),
-      ui.row({ gap = colGap, flexGrow = 1 }, { agendaCard(), screenCard(screenInnerW) }),
+      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
     })
-    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoCard(todoTextW) })
+    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode })
   else
     local ggap = 3
     local ghInner = leftW - 28
     local cell = math.max(4, math.min(short and 9 or 13, math.floor(ghInner / weeks) - ggap))
     left = ui.column({ gap = colGap, flexGrow = 3 }, {
       githubCard(ghInner, cell, ggap, leftW),
-      ui.row({ gap = colGap, flexGrow = 1 }, { agendaCard(), screenCard(screenInnerW) }),
+      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
     })
-    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoCard(todoTextW), systemCard() })
+    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode, systemCard() })
   end
 
   local kids = {
