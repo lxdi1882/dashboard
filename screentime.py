@@ -178,6 +178,22 @@ def desktop_icons():
     return idx
 
 
+SITE_SUFFIXES = {"com", "org", "net", "edu", "gov", "mil", "info", "biz", "dev", "app", "io", "ai", "tv",
+                 "xyz", "online", "tech", "shop", "cloud", "site", "blog"}
+COUNTRY_SUFFIXES = {"co", "com", "net", "org", "gov", "edu", "ac"}
+
+
+def site_label(domain):
+    label = re.sub(r"^www[0-9]*\.", "", domain)
+    parts = label.split(".")
+    if len(parts) >= 2 and (parts[-1] in SITE_SUFFIXES or re.fullmatch(r"[a-z]{2}", parts[-1])):
+        if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in COUNTRY_SUFFIXES:
+            parts.pop()
+        parts.pop()
+    label = ".".join(parts) or domain
+    return label[:1].upper() + label[1:]
+
+
 def load_sites(directory, dates):
     """Read aggregate domain durations exported by the optional Brave companion."""
     days = {day: {} for day, _ in dates}
@@ -213,6 +229,7 @@ def load_sites(directory, dates):
         return {
             "seconds": [days[day].get(domain, 0) // 1000 for day, _ in dates],
             "icon": icon_for(domain),
+            "name": site_label(domain),
         }
 
     def ranked(values):
@@ -220,12 +237,11 @@ def load_sites(directory, dates):
         for domain, ms in sorted(values.items(), key=lambda item: (-item[1], item[0]))[:10]:
             if ms < 1000:
                 continue
-            rows.append({"domain": domain, "sec": ms // 1000, "icon": icon_for(domain)})
+            rows.append({"domain": domain, "name": site_label(domain), "sec": ms // 1000, "icon": icon_for(domain)})
         return rows
 
-    listed_days = {day: ranked(values) for day, values in days.items()}
     ranges, range_totals = {}, {}
-    for key, length in (("today", 1), ("3d", 3), ("7d", 7), ("14d", 14)):
+    for key, length in (("today", 1), ("7d", 7), ("14d", 14)):
         totals = {}
         for day, _ in dates[-length:]:
             for domain, ms in days[day].items():
@@ -234,9 +250,8 @@ def load_sites(directory, dates):
         range_totals[key] = sum(totals.values()) // 1000
 
     # Include exact daily totals for every listed site, even on days it ranked below the top ten.
-    domains = sorted({row["domain"] for listing in (*listed_days.values(), *ranges.values()) for row in listing})
+    domains = sorted({row["domain"] for listing in ranges.values() for row in listing})
     return {
-        "days": listed_days,
         "ranges": ranges,
         "rangeTotals": range_totals,
         "calendar": [{"date": day, "recorded": bool(days[day])} for day, _ in dates],
@@ -362,7 +377,8 @@ def main():
             domain = item[len(SITE_PREFIX):]
             if domain not in sites["trends"]:
                 sites["trends"][domain] = trend_for(domain)
-            return {"id": item, "name": domain, "domain": domain, "icon": sites["trends"][domain]["icon"]}
+            trend = sites["trends"][domain]
+            return {"id": item, "name": trend["name"], "domain": domain, "icon": trend["icon"]}
         if item == BRAVE_REMAINDER:
             return {"id": item, "name": "Other Brave time", "icon": icons.get(brave.lower(), brave)}
         return {"id": item, "name": item, "icon": icons.get(item.lower(), "")}

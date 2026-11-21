@@ -782,7 +782,6 @@ local screenSite = nil
 local screenSiteDay = nil
 
 local function openScreenSite(domain)
-  screenDetailsTab = "sites"
   screenSite = domain
   screenSiteDay = nil
   update()
@@ -1236,8 +1235,7 @@ local function screenCard(innerW)
         else
           lead = ui.glyph({ name = "app-window", size = 20, color = "on_surface_variant" })
         end
-        local canOpenSite = screenFocus and screen.sites ~= nil and (e.a.domain ~= nil
-          or (e.a.id ~= "browser:brave-other" and string.find(string.lower(e.a.id), "brave", 1, true) ~= nil))
+        local canOpenSite = screenFocus and screen.sites ~= nil and e.a.domain ~= nil
         table.insert(listRows, ui.row({
           key = "usage-" .. e.a.id, gap = 10, align = "center",
           onClick = canOpenSite and function()
@@ -1355,7 +1353,7 @@ local function screenHighlights()
         onClick = function() openScreenSite(leader.domain) end,
       }, {
         siteIcon(leader.icon, 13),
-        ui.label({ text = leader.domain, fontSize = 11, maxLines = 1, flexGrow = 1, color = "on_surface" }),
+        ui.label({ text = leader.name or leader.domain, fontSize = 11, maxLines = 1, flexGrow = 1, color = "on_surface" }),
         ui.label({ text = duration, fontSize = 11, color = "on_surface_variant" }),
         ui.glyph({ name = "chevron-right", size = 12, color = "on_surface_variant" }),
       }))
@@ -1432,11 +1430,11 @@ local function screenSiteTrend(width, trend, calendar)
   end
   local heading = ui.row({ gap = 6, align = "center" }, {
     ui.button({
-      key = "back-to-sites", glyph = "arrow-left", text = "Sites", variant = "ghost", controlSize = "sm",
+      key = "close-site-trend", glyph = "arrow-left", text = "Back", variant = "ghost", controlSize = "sm",
       onClick = function() openScreenSite(nil) end,
     }),
     siteIcon(trend.icon, 16),
-    ui.label({ text = screenSite, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
+    ui.label({ text = trend.name or screenSite, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
   })
   local stats = ui.row({ gap = 14, align = "start" }, {
     stat(calendar[today].recorded and fmtDur(trend.seconds[today]) or "–", "Today"),
@@ -1462,63 +1460,21 @@ local function screenSiteTrend(width, trend, calendar)
   }) }
 end
 
-local function screenSites(width)
+local function activeSiteTrend(width)
   local data = screen.sites
   local trend = screenSite and data and data.trends and data.trends[screenSite]
   if trend ~= nil and data.calendar ~= nil and #data.calendar > 0 then
     return screenSiteTrend(width, trend, data.calendar)
   end
-
-  local heading = "Sites today"
-  local items = {}
-  if screen.sites ~= nil then
-    if screenDay ~= nil and screen.sites.days[screenDay] ~= nil then
-      heading = "Sites · " .. os.date("%b %d", dateToTime(screenDay))
-      items = screen.sites.days[screenDay]
-    else
-      if screenRange == "3d" then
-        heading = "Sites · last 3 days"
-      elseif screenRange == "14d" then
-        heading = "Sites · last 14 days"
-      end
-      items = screen.sites.ranges[screenRange] or {}
-    end
-  end
-
-  local rows = {}
-  if #items == 0 then
-    table.insert(rows, ui.label({
-      text = screen.sites == nil and "Enable Dashboard Site Time in Brave to see site totals." or "No sites recorded for this period.",
-      fontSize = 12, maxLines = 3, color = "on_surface_variant",
-    }))
-  end
-  for _, item in ipairs(items) do
-    table.insert(rows, ui.row({ key = "site-" .. item.domain, gap = 8, paddingH = 7, paddingV = 5,
-      align = "center", radius = 7, fill = "surface_container_high",
-      onClick = function() openScreenSite(item.domain) end,
-    }, {
-      siteIcon(item.icon, 16),
-      ui.label({ text = item.domain, fontSize = 12, maxLines = 1, flexGrow = 1, color = "on_surface" }),
-      ui.label({ text = fmtDur(item.sec), fontSize = 12, color = "on_surface_variant" }),
-      ui.glyph({ name = "chevron-right", size = 13, color = "on_surface_variant" }),
-    }))
-  end
-  return {
-    ui.label({ text = heading, fontSize = 12, fontWeight = "bold", color = "on_surface" }),
-    ui.scroll({ gap = 5, flexGrow = 1 }, rows),
-  }
+  return nil
 end
 
 local function screenTab(id, text, active)
   return ui.button({
     key = "screen-tab-" .. id, text = text, controlSize = "sm", variant = active and "primary" or "ghost",
     onClick = function()
-      if id == "sites" then
-        openScreenSite(nil)
-      else
-        screenDetailsTab = id
-        update()
-      end
+      screenDetailsTab = id
+      openScreenSite(nil)
     end,
   })
 end
@@ -1535,18 +1491,14 @@ local function renderScreenCard(innerW, model, sidebarWidth)
   end
 
   local highlights = screenHighlights()
+  local siteDetail = activeSiteTrend(sidebarWidth and (sidebarWidth - 24) or (innerW - 4))
   if sidebarWidth ~= nil then
     local sidebar = {}
     if #highlights > 0 then
       table.insert(highlights, 1, sectionTitle("chart-bar", "Usage highlights"))
       table.insert(sidebar, card({ padding = 8, gap = 5 }, highlights))
     end
-    local showSites = screenDetailsTab == "sites"
-    local details = { ui.row({ gap = 6 }, { screenTab("apps", "Apps", not showSites), screenTab("sites", "Sites", showSites) }) }
-    for _, node in ipairs(showSites and screenSites(sidebarWidth - 24) or model.apps) do
-      table.insert(details, node)
-    end
-    table.insert(sidebar, card({ flexGrow = 1, padding = 10, gap = 6 }, details))
+    table.insert(sidebar, card({ flexGrow = 1, padding = 10, gap = 6 }, siteDetail or model.apps))
     table.insert(children, ui.row({ flexGrow = 1, gap = 10 }, {
       ui.column({ width = innerW + 24, clip = true }, { card({ flexGrow = 1, padding = 12, gap = 8 }, { chart }) }),
       ui.column({ width = sidebarWidth, gap = 8 }, sidebar),
@@ -1554,17 +1506,23 @@ local function renderScreenCard(innerW, model, sidebarWidth)
   else
     table.insert(children, chart)
     local showHighlights = screenDetailsTab == "highlights" and #highlights > 0
-    local showSites = screenDetailsTab == "sites"
-    local tabs = { screenTab("apps", "Apps", not showHighlights and not showSites), screenTab("sites", "Sites", showSites) }
-    if #highlights > 0 then
-      table.insert(tabs, screenTab("highlights", "Highlights", showHighlights))
-    end
-    table.insert(children, ui.row({ gap = 6 }, tabs))
-    if showHighlights then
-      table.insert(children, ui.scroll({ gap = 5, flexGrow = 1 }, highlights))
-    else
-      for _, node in ipairs(showSites and screenSites(innerW - 4) or model.apps) do
+    if siteDetail ~= nil then
+      for _, node in ipairs(siteDetail) do
         table.insert(children, node)
+      end
+    else
+      if #highlights > 0 then
+        table.insert(children, ui.row({ gap = 6 }, {
+          screenTab("apps", "Apps", not showHighlights),
+          screenTab("highlights", "Highlights", showHighlights),
+        }))
+      end
+      if showHighlights then
+        table.insert(children, ui.scroll({ gap = 5, flexGrow = 1 }, highlights))
+      else
+        for _, node in ipairs(model.apps) do
+          table.insert(children, node)
+        end
       end
     end
   end
