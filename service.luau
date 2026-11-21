@@ -133,13 +133,17 @@ local function refreshScreenTime()
     end
     if r.ok == true and r.apps ~= nil then
       iconBudget = 6
-      for _, a in ipairs(r.apps) do
-        local iconName = (a.icon ~= nil and a.icon ~= "") and a.icon or a.id
-        local path = iconFor(iconName)
-        if path == "" and iconName ~= a.id then
-          path = iconFor(a.id)
+      for _, apps in ipairs({ r.apps, r.hourApps or {}, r.usageApps or {} }) do
+        for _, a in pairs(apps) do
+          if a.domain == nil then
+            local iconName = (a.icon ~= nil and a.icon ~= "") and a.icon or a.id
+            local path = iconFor(iconName)
+            if path == "" and iconName ~= a.id then
+              path = iconFor(a.id)
+            end
+            a.icon = path
+          end
         end
-        a.icon = path
       end
     end
     noctalia.state.set("screen", r)

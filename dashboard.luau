@@ -810,9 +810,20 @@ local APP_COLORS = {
 }
 local OTHER_COLOR = "outline_variant"
 
-local function screenAppColors(apps)
+local function screenAppColors(apps, extraApps)
   local colors, used = {}, {}
+  local all = table.clone(apps)
+  local known = {}
   for _, app in ipairs(apps) do
+    known[app.id] = true
+  end
+  for _, app in ipairs(extraApps or {}) do
+    if not known[app.id] then
+      table.insert(all, app)
+      known[app.id] = true
+    end
+  end
+  for _, app in ipairs(all) do
     local hash = 0
     for i = 1, #app.id do
       hash = (hash * 31 + string.byte(app.id, i)) % #APP_COLORS
@@ -996,7 +1007,6 @@ local function screenCard(innerW)
       table.insert(rows, ui.label({ text = tostring(screen.sample or ""), fontSize = 10, color = "on_surface", maxLines = 8, maxWidth = innerW }))
     end
   else
-    local colors = screenAppColors(screen.apps)
     local range = RANGES[1]
     for _, r in ipairs(RANGES) do
       if r.k == screenRange then
@@ -1035,6 +1045,26 @@ local function screenCard(innerW)
     end
     table.insert(rows, controls)
 
+    local dailyApps = screen.apps
+    local scope
+    if screen.usageScopes ~= nil then
+      local scopeKey = detailDay and detailDay.d or (range.k == "today" and screen.days[#screen.days].d or range.k)
+      scope = screen.usageScopes[scopeKey]
+      if scope ~= nil then
+        sums = scope.by
+        dailyApps = {}
+        for _, id in ipairs(scope.ids) do
+          local app = screen.usageApps[id]
+          if app ~= nil then
+            table.insert(dailyApps, app)
+          end
+        end
+      end
+    end
+    local hourlyApps = screen.hourApps or dailyApps
+    local chartApps = hourly and hourlyApps or dailyApps
+    local colors = screenAppColors(dailyApps, screen.hourApps)
+
     -- 2. bars data (each bar carries its own axis label)
     local bars = {}
     local HOUR_LABELS = { [0] = "12 AM", [6] = "6 AM", [12] = "12 PM", [18] = "6 PM" }
@@ -1069,7 +1099,7 @@ local function screenCard(innerW)
         local label = d.label .. " " .. string.sub(d.d, 9, 10)
         table.insert(bars, {
           sec = d.sec,
-          by = d.by,
+          by = scope and scope.buckets and scope.buckets[d.d] or d.by,
           tip = label .. " · " .. fmtDur(d.sec),
           label = label,
           key = d.d,
@@ -1148,7 +1178,7 @@ local function screenCard(innerW)
           update()
         end
         local x = inset + (i - 1) * (width + gap) + width / 2
-        table.insert(cols, bar(b, maxSec, width, "sb" .. i, b == selectedBar, selectBar, screen.apps, colors, x))
+        table.insert(cols, bar(b, maxSec, width, "sb" .. i, b == selectedBar, selectBar, chartApps, colors, x))
       end
       local step = 1
       if hourly then
@@ -1163,6 +1193,9 @@ local function screenCard(innerW)
         ui.box({ key = "axis-label-gap", width = 1, height = labelGap, fill = "surface/0" }),
         axisRow(bars, width, gap, step),
       }))
+      if screen.mixed and hourly then
+        table.insert(rows, ui.label({ text = "Hourly bars show apps", fontSize = 11, color = "on_surface_variant" }))
+      end
     elseif detailDay ~= nil then
       table.insert(rows, screenMessage("No hourly data recorded for this day.", innerW))
     else
@@ -1175,13 +1208,15 @@ local function screenCard(innerW)
     if selectedBar ~= nil then
       listTitle = selectedBar.label .. " · apps used"
     elseif detailDay ~= nil then
-      listTitle = dayLabel .. " · apps used"
+      listTitle = dayLabel .. (screen.mixed and " · apps and sites" or " · apps used")
     elseif range.k == "today" then
-      listTitle = "Apps used today"
+      listTitle = screen.mixed and "Apps and sites today" or "Apps used today"
     else
-      listTitle = "Apps used · " .. string.lower(range.label) .. (screenFocus and "" or " (tap a bar to pick a day)")
+      listTitle = (screen.mixed and "Apps and sites · " or "Apps used · ") .. string.lower(range.label)
+        .. (screenFocus and "" or " (tap a bar to pick a day)")
     end
-    for _, a in ipairs(screen.apps) do
+    local listApps = selectedBar ~= nil and hourlyApps or dailyApps
+    for _, a in ipairs(listApps) do
       if (sums[a.id] or 0) > 0 then
         table.insert(list, { a = a, sec = sums[a.id] })
       end
@@ -1201,12 +1236,12 @@ local function screenCard(innerW)
         else
           lead = ui.glyph({ name = "app-window", size = 20, color = "on_surface_variant" })
         end
-        local brave = screenFocus and screen.sites ~= nil
-          and string.find(string.lower(e.a.id), "brave", 1, true) ~= nil
+        local canOpenSite = screenFocus and screen.sites ~= nil and (e.a.domain ~= nil
+          or (e.a.id ~= "browser:brave-other" and string.find(string.lower(e.a.id), "brave", 1, true) ~= nil))
         table.insert(listRows, ui.row({
-          key = "sa" .. i, gap = 10, align = "center",
-          onClick = brave and function()
-            openScreenSite(nil)
+          key = "usage-" .. e.a.id, gap = 10, align = "center",
+          onClick = canOpenSite and function()
+            openScreenSite(e.a.domain)
           end or nil,
         }, {
           lead,
@@ -1218,7 +1253,7 @@ local function screenCard(innerW)
             }),
             ui.progress({ progress = e.sec / top, fill = "primary/0.40", track = "surface_container_high", radius = 3, height = 4 }),
           }),
-          brave and ui.glyph({ name = "chevron-right", size = 14, color = "on_surface_variant" }) or nil,
+          canOpenSite and ui.glyph({ name = "chevron-right", size = 14, color = "on_surface_variant" }) or nil,
         }))
       end
     end
@@ -1282,7 +1317,11 @@ local function screenHighlights()
   for i, stats in ipairs(screen.highlights or {}) do
     local children = { ui.label({ text = labels[i], fontSize = 11, color = "on_surface_variant" }) }
     if stats.total > 0 and stats.top ~= "" then
-      table.insert(children, ui.row({ gap = 6, align = "center" }, {
+      local domain = stats.topDomain
+      table.insert(children, ui.row({
+        gap = 6, align = "center",
+        onClick = domain ~= nil and domain ~= "" and function() openScreenSite(domain) end or nil,
+      }, {
         ui.label({ text = stats.top, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
         ui.label({ text = fmtDur(stats.topSec) .. " · " .. math.floor(100 * stats.topSec / stats.total + 0.5) .. "%",
           fontSize = 12, maxLines = 1, color = "on_surface_variant" }),
@@ -1305,7 +1344,7 @@ local function screenHighlights()
     local period = sitePeriods[i]
     local sites = screen.sites and screen.sites.ranges[period]
     local leader = sites and sites[1]
-    if leader ~= nil then
+    if leader ~= nil and leader.domain ~= stats.topDomain then
       local total = screen.sites.rangeTotals and screen.sites.rangeTotals[period] or 0
       local duration = fmtDur(leader.sec)
       if total > 0 then
@@ -1386,7 +1425,7 @@ local function screenSiteTrend(width, trend, calendar)
   end
 
   local point = screenSiteDay and calendar[screenSiteDay]
-  local label = "Daily website time"
+  local label = "Daily time recorded by Brave"
   if point ~= nil then
     local day = os.date("%b %d", dateToTime(point.date))
     label = day .. " · " .. (point.recorded and fmtDur(trend.seconds[screenSiteDay]) or "No browser data")

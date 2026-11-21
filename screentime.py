@@ -26,6 +26,9 @@ NAME_FIELDS = ("app", "app_id", "appId", "name", "id", "class", "title")
 VALUE_FIELDS = ("seconds", "secs", "duration", "time", "ms")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HOUR_RE = re.compile(r"^\d{1,2}$")
+BRAVE_APP = re.compile(r"(?:^|[.])brave(?:$|[-.])")
+SITE_PREFIX = "site:"
+BRAVE_REMAINDER = "browser:brave-other"
 BROWSER_APP = re.compile(
     r"(?:^|[.])(?:brave|chromium|chrome|firefox|librewolf|waterfox|floorp|vivaldi|opera|"
     r"microsoft-edge|zen-browser|qutebrowser|epiphany|falkon|thorium|ungoogled-chromium)"
@@ -195,20 +198,29 @@ def load_sites(directory, dates):
                 if type(duration) is int and duration > 0 and re.fullmatch(r"[a-z0-9.-]{1,253}", domain):
                     days[day][domain] = days[day].get(domain, 0) + duration
     if not profiles:
-        return None
+        return None, {}, None
 
     icons = {}
+
+    def icon_for(domain):
+        if domain not in icons:
+            name = hashlib.sha256(domain.encode("ascii")).hexdigest() + ".png"
+            paths = (directory / "icons" / profile / name for profile in profiles)
+            icons[domain] = next((str(path) for path in paths if path.is_file()), "")
+        return icons[domain]
+
+    def trend_for(domain):
+        return {
+            "seconds": [days[day].get(domain, 0) // 1000 for day, _ in dates],
+            "icon": icon_for(domain),
+        }
 
     def ranked(values):
         rows = []
         for domain, ms in sorted(values.items(), key=lambda item: (-item[1], item[0]))[:10]:
             if ms < 1000:
                 continue
-            if domain not in icons:
-                name = hashlib.sha256(domain.encode("ascii")).hexdigest() + ".png"
-                paths = (directory / "icons" / profile / name for profile in profiles)
-                icons[domain] = next((str(path) for path in paths if path.is_file()), "")
-            rows.append({"domain": domain, "sec": ms // 1000, "icon": icons[domain]})
+            rows.append({"domain": domain, "sec": ms // 1000, "icon": icon_for(domain)})
         return rows
 
     listed_days = {day: ranked(values) for day, values in days.items()}
@@ -228,11 +240,44 @@ def load_sites(directory, dates):
         "ranges": ranges,
         "rangeTotals": range_totals,
         "calendar": [{"date": day, "recorded": bool(days[day])} for day, _ in dates],
-        "trends": {domain: {
-            "seconds": [days[day].get(domain, 0) // 1000 for day, _ in dates],
-            "icon": icons[domain],
-        } for domain in domains},
-    }
+        "trends": {domain: trend_for(domain) for domain in domains},
+    }, days, trend_for
+
+
+def attribute_sites(apps, site_ms):
+    """Subdivide the Brave seconds already counted in the day total."""
+    brave = [app for app in apps if BRAVE_APP.search(app.lower())]
+    budget = sum(apps[app] for app in brave)
+    if budget <= 0:
+        return apps
+    total_ms = sum(site_ms.values())
+    credited = min(budget, total_ms // 1000)
+    result = {app: seconds for app, seconds in apps.items() if app not in brave}
+    if credited > 0:
+        # Cumulative rounding keeps the domain split exactly equal to the credited budget.
+        cumulative_ms = 0
+        allocated = 0
+        for domain, duration in sorted(site_ms.items()):
+            cumulative_ms += duration
+            target = cumulative_ms * credited // total_ms
+            if target > allocated:
+                result[SITE_PREFIX + domain] = target - allocated
+            allocated = target
+    if budget > credited:
+        result[BRAVE_REMAINDER] = budget - credited
+    return result
+
+
+def sum_usage(days):
+    totals = {}
+    for by in days:
+        for item, duration in by.items():
+            totals[item] = totals.get(item, 0) + duration
+    return totals
+
+
+def rank_usage(totals):
+    return sorted(totals, key=lambda item: (-totals[item], item))
 
 
 def main():
@@ -269,73 +314,110 @@ def main():
     # anything above 48h of seconds in a single day must be milliseconds
     div = 1000 if max(a.total for a in accs.values()) > 172800 else 1
 
-    # rank apps over the whole window; the top ones get their own colour, the rest become "_other"
-    totals = {}
-    for a in accs.values():
-        for app, v in a.apps.items():
-            totals[app] = totals.get(app, 0) + v
-    ranked = [k for k, _ in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)]
-    limit = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 12
-    top = ranked[:limit]
-    top_set = set(top)
+    sites, site_days, trend_for = load_sites(sys.argv[3], dates) if len(sys.argv) > 3 else (None, {}, None)
 
-    def fold(by):
+    def in_seconds(by):
+        return {app: sec for app, duration in by.items() if (sec := int(duration / div)) > 0}
+
+    raw_days = {day: in_seconds(accs[day].apps) if day in accs else {} for day, _ in dates}
+    daily = {day: attribute_sites(by, site_days.get(day, {})) if sites is not None else by
+             for day, by in raw_days.items()}
+    mixed = any(daily[day] is not by for day, by in raw_days.items())
+    ranked = rank_usage(sum_usage(daily.values()))
+    raw_ranked = rank_usage(sum_usage(raw_days.values())) if mixed else ranked
+    limit = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 12
+    top, hourly_top = ranked[:limit], raw_ranked[:limit]
+    top_set, hourly_set = set(top), set(hourly_top)
+
+    def fold(by, keep):
         out = {}
-        for app, v in by.items():
-            key = app if app in top_set else "_other"
-            sec = int(v / div)
-            if sec > 0:
-                out[key] = out.get(key, 0) + sec
+        for item, seconds in by.items():
+            key = item if item in keep else "_other"
+            out[key] = out.get(key, 0) + seconds
         return out
 
     days = []
     hours = []
     for d, lab in dates:
         a = accs.get(d)
-        day = {"d": d, "label": lab, "sec": int(a.total / div) if a else 0, "by": fold(a.apps) if a else {}}
+        day = {"d": d, "label": lab, "sec": int(a.total / div) if a else 0, "by": fold(daily[d], top_set)}
         if a is not None and a.hour_apps:
             if d == dates[-1][0]:
                 for h in range(24):
-                    by = fold(a.hour_apps.get(h, {}))
+                    by = fold(in_seconds(a.hour_apps.get(h, {})), hourly_set)
                     hours.append({"sec": sum(by.values()), "by": by})
             else:
                 # Send only recorded buckets. The dashboard fills the gaps with zeroes.
                 day["hours"] = {
                     f"h{h}": by for h, apps in a.hour_apps.items()
-                    if 0 <= h < 24 and (by := fold(apps))
+                    if 0 <= h < 24 and (by := fold(in_seconds(apps), hourly_set))
                 }
         days.append(day)
 
+    icons = desktop_icons() if top or hourly_top else {}
+    brave = next((app for app in raw_ranked if BRAVE_APP.search(app.lower())), "")
+
+    def metadata(item):
+        if sites is not None and item.startswith(SITE_PREFIX):
+            domain = item[len(SITE_PREFIX):]
+            if domain not in sites["trends"]:
+                sites["trends"][domain] = trend_for(domain)
+            return {"id": item, "name": domain, "domain": domain, "icon": sites["trends"][domain]["icon"]}
+        if item == BRAVE_REMAINDER:
+            return {"id": item, "name": "Other Brave time", "icon": icons.get(brave.lower(), brave)}
+        return {"id": item, "name": item, "icon": icons.get(item.lower(), "")}
+
+    scopes, scope_metadata = {}, {}
+    if mixed:
+        def add_scope(key, day_keys):
+            totals = sum_usage(daily[day] for day in day_keys)
+            ids = rank_usage(totals)[:limit]
+            keep = set(ids)
+            scope = {"ids": ids, "by": fold(totals, keep)}
+            if len(day_keys) > 1:
+                scope["buckets"] = {day: fold(daily[day], keep) for day in day_keys}
+            scopes[key] = scope
+            for item in ids:
+                if item not in scope_metadata:
+                    scope_metadata[item] = metadata(item)
+
+        for day, _ in dates:
+            add_scope(day, [day])
+        for key, length in (("3d", 3), ("14d", 14)):
+            add_scope(key, [day for day, _ in dates[-length:]])
+
     highlights = []
     for length in (1, 7, 14):
-        by = {}
-        seconds = 0
-        for date, _ in dates[-length:]:
-            a = accs.get(date)
-            if a is None:
-                continue
-            seconds += a.total
-            for app, duration in a.apps.items():
-                by[app] = by.get(app, 0) + duration
-        ranked_apps = sorted(by, key=lambda app: (-by[app], app))
-        leader = next((app for app in ranked_apps if by[app] > 0), "")
-        other = next((app for app in ranked_apps if by[app] > 0 and not is_browser(app)), "")
-        browser_time = sum(duration for app, duration in by.items() if is_browser(app))
+        by, raw = {}, {}
+        for day, _ in dates[-length:]:
+            for item, seconds in daily[day].items():
+                by[item] = by.get(item, 0) + seconds
+            for app, seconds in raw_days[day].items():
+                raw[app] = raw.get(app, 0) + seconds
+        leader = min(by, key=lambda item: (-by[item], item)) if by else ""
+        raw_leader = min(raw, key=lambda app: (-raw[app], app)) if raw else ""
+        other = min((app for app in raw if not is_browser(app)), key=lambda app: (-raw[app], app), default="")
+        info = metadata(leader) if leader else {"name": ""}
         highlights.append({
-            "total": int(seconds / div),
-            "top": leader,
-            "topSec": int(by.get(leader, 0) / div),
-            "browserSec": int(browser_time / div),
-            "outside": other if leader and is_browser(leader) else "",
-            "outsideSec": int(by.get(other, 0) / div),
+            "total": sum(day["sec"] for day in days[-length:]),
+            "top": info["name"],
+            "topDomain": info.get("domain", ""),
+            "topSec": by.get(leader, 0),
+            "browserSec": sum(seconds for app, seconds in raw.items() if is_browser(app)),
+            "outside": other if raw_leader and is_browser(raw_leader) else "",
+            "outsideSec": raw.get(other, 0),
         })
 
-    sites = load_sites(sys.argv[3], dates) if len(sys.argv) > 3 else None
-    icons = desktop_icons() if top else {}
     print(json.dumps({
         "ok": True,
         "sec": days[-1]["sec"],
-        "apps": [{"id": k, "name": k, "icon": icons.get(k.lower(), "")} for k in top],
+        "apps": [metadata(item) for item in top],
+        **({
+            "hourApps": [metadata(app) for app in hourly_top],
+            "mixed": True,
+            "usageScopes": scopes,
+            "usageApps": scope_metadata,
+        } if mixed else {}),
         "hidden": len(ranked) - len(top),
         "expanded": limit > 12,
         "days": days,
