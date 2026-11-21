@@ -76,6 +76,61 @@ local function nearest(placed, id, r, w, h)
   return best
 end
 
+local function rearrange(layout, id, wanted, width, height, keepNeighbors)
+  if not Grid.fits({}, id, wanted) then
+    return nil
+  end
+  local placed = { [id] = wanted }
+  if keepNeighbors then
+    for _, other in ipairs(Grid.ids) do
+      local r = layout[other]
+      if other ~= id and r ~= nil and Grid.fits(placed, other, r) then
+        placed[other] = r
+      end
+    end
+  end
+  for _, other in ipairs(Grid.ids) do
+    local r = layout[other]
+    if other ~= id and r ~= nil and placed[other] == nil then
+      local minW, minH = Grid.minimum(other, width, height)
+      -- A neighboring card can use the space just vacated by the dragged card.
+      local origin = layout[id] or r
+      placed[other] = nearest(placed, other, origin, r.w, r.h)
+        or nearest(placed, other, origin, minW, minH)
+      if placed[other] == nil then
+        return nil
+      end
+    end
+  end
+  return placed
+end
+
+function Grid.move(layout, id, x, y, width, height)
+  local current = layout[id]
+  local minW, minH = Grid.minimum(id, width, height)
+  for _, other in ipairs(Grid.ids) do
+    local slot = layout[other]
+    if other ~= id and slot ~= nil and x >= slot.x and x < slot.x + slot.w and y >= slot.y and y < slot.y + slot.h then
+      if current ~= nil then
+        local otherW, otherH = Grid.minimum(other, width, height)
+        if slot.w >= minW and slot.h >= minH and current.w >= otherW and current.h >= otherH then
+          local swapped = table.clone(layout)
+          swapped[id], swapped[other] = slot, current
+          return swapped
+        end
+      end
+      x, y = slot.x, slot.y
+      break
+    end
+  end
+
+  local w = current and current.w or minW
+  local h = current and current.h or minH
+  local wanted = { x = math.min(x, Grid.cols - w), y = math.min(y, Grid.rows - h), w = w, h = h }
+  return rearrange(layout, id, wanted, width, height, true)
+    or rearrange(layout, id, wanted, width, height, false)
+end
+
 function Grid.reflow(layout, width, height)
   local placed = {}
   for _, id in ipairs(Grid.ids) do

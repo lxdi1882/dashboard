@@ -37,26 +37,26 @@ function dropCard(payload, target)
     return
   end
   x, y = tonumber(x), tonumber(y)
-  local current = draft[id]
-  local mw, mh = Grid.minimum(id, context.width, context.height)
-  local r
   if operation == "move" then
-    local w = current and current.w or mw
-    local h = current and current.h or mh
-    r = { x = math.min(x, Grid.cols - w), y = math.min(y, Grid.rows - h), w = w, h = h }
-  elseif operation == "resize" and current ~= nil then
-    r = { x = current.x, y = current.y, w = x + 1 - current.x, h = y + 1 - current.y }
-  end
-  if r == nil then
-    return
-  end
-  if r.w < mw or r.h < mh then
-    feedback = "That card needs more room."
-  elseif not Grid.fits(draft, id, r) then
-    feedback = "Cards can’t overlap."
-  else
-    draft[id] = r
-    feedback = nil
+    local nextLayout = Grid.move(draft, id, x, y, context.width, context.height)
+    if nextLayout ~= nil then
+      draft = nextLayout
+      feedback = nil
+    else
+      feedback = "No room here. Try a different card or make space in the launcher."
+    end
+  elseif operation == "resize" and draft[id] ~= nil then
+    local current = draft[id]
+    local mw, mh = Grid.minimum(id, context.width, context.height)
+    local r = { x = current.x, y = current.y, w = x + 1 - current.x, h = y + 1 - current.y }
+    if r.w < mw or r.h < mh then
+      feedback = "That card needs more room."
+    elseif not Grid.fits(draft, id, r) then
+      feedback = "Move a neighboring card first to make room for this resize."
+    else
+      draft[id] = r
+      feedback = nil
+    end
   end
   render()
 end
@@ -129,7 +129,7 @@ function render()
   panel.render(ui.column({ padding = 14, gap = 8, justify = "start" }, {
     ui.label({ text = "Edit dashboard · " .. context.monitor, fontSize = 18, fontWeight = "bold", color = "on_surface" }),
     ui.label({
-      text = feedback or "Drag the top handle to move and the bottom corner to resize. Drop cards in the launcher to park them.",
+      text = feedback or "Drag onto a card to swap places. Use the bottom corner to resize, or drop a card in the launcher to park it.",
       fontSize = 12, maxLines = 2, color = feedback and "error" or "on_surface_variant",
     }),
     canvas(),
