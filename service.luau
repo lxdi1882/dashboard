@@ -258,9 +258,12 @@ local function publishGithub(list, user, total)
   end
 
   local sum, recentWeek, recentMonth, activeDays = 0, 0, 0, 0
+  local weekdays = { 0, 0, 0, 0, 0, 0, 0 }
   for i, c in ipairs(list) do
     local count = c.count or 0
     sum = sum + count
+    local weekday = (pad + i - 1) % 7 + 1
+    weekdays[weekday] = weekdays[weekday] + count
     if i > #list - 30 then
       recentMonth = recentMonth + count
       if count > 0 then
@@ -284,6 +287,7 @@ local function publishGithub(list, user, total)
     recentWeek = recentWeek,
     recentMonth = recentMonth,
     activeDays = activeDays,
+    weekdays = weekdays,
   })
 end
 

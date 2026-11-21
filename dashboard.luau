@@ -390,6 +390,28 @@ local function githubWeeklyTrend()
   })
 end
 
+local function githubWeekdays(totals)
+  local names = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" }
+  local peak = math.max(1, table.unpack(totals))
+  local rows = {}
+  for i, name in ipairs(names) do
+    local count = totals[i]
+    table.insert(rows, ui.row({ gap = 8, align = "center" }, {
+      ui.label({ text = name, minWidth = 32, fontSize = 12, color = "on_surface_variant" }),
+      ui.progress({
+        progress = count / peak, height = 7, radius = 3, flexGrow = 1,
+        fill = count == peak and "primary" or "primary/0.55",
+        track = "surface_container_high",
+      }),
+      ui.label({ text = tostring(count), minWidth = 32, fontSize = 12, textAlign = "right", color = "on_surface" }),
+    }))
+  end
+  return ui.column({ gap = 5 }, {
+    sectionTitle("calendar-event", "Activity by weekday", "Past year"),
+    ui.column({ gap = 4 }, rows),
+  })
+end
+
 local function githubCard(width, height, embedded)
   local inner = width - 24
   local expanded = maximizedCard == "github"
@@ -513,6 +535,10 @@ local function githubCard(width, height, embedded)
   if embedded and height >= 423 and inner >= 500 then
     table.insert(contents, ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 4 }))
     table.insert(contents, githubWeeklyTrend())
+    if height >= 530 and gh.weekdays ~= nil then
+      table.insert(contents, ui.separator({ thickness = 1, color = "outline_variant/0.5", spacing = 4 }))
+      table.insert(contents, githubWeekdays(gh.weekdays))
+    end
   end
   return card({ width = width, flexGrow = 1, padding = 12, gap = 6 }, contents)
 end
