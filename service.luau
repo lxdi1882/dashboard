@@ -422,6 +422,7 @@ end
 local function setVisible(v)
   visible = v
   closeAskedAt = 0
+  noctalia.state.set("anim_close", 0)
   if not v then
     screenLimit = 12
   end
@@ -435,35 +436,48 @@ local function setVisible(v)
   end
 end
 
--- ask the layer to play its close animation; it answers with close_req when done
+-- Keep one request active until the layer acknowledges it or the service cancels it.
 local function requestClose()
+  if not visible or closeAskedAt ~= 0 then
+    return
+  end
   closeAskedAt = noctalia.nowMs()
   noctalia.state.set("anim_close", closeAskedAt)
+end
+
+local function showDashboard()
+  if not visible then
+    setVisible(true)
+  elseif closeAskedAt ~= 0 then
+    closeAskedAt = 0
+    noctalia.state.set("anim_close", 0)
+  end
 end
 
 function onIpc(event, payload)
   noctalia.log("dashboard ipc '" .. tostring(event) .. "' (visible=" .. tostring(visible) .. ")")
   if event == "toggle" then
-    if visible then
+    if visible and closeAskedAt == 0 then
       requestClose()
     else
-      setVisible(true)
+      showDashboard()
     end
   elseif event == "show" then
-    setVisible(true)
+    showDashboard()
   elseif event == "hide" then
-    if visible then
-      requestClose()
-    end
+    requestClose()
   elseif event == "refresh" then
     refreshAll()
     lastGithub = 0
   end
 end
 
--- the layer asks the service to close it, so this script stays the single owner of the open/closed flag
 noctalia.state.watch("close_req", function(_)
-  if visible then
+  requestClose()
+end)
+
+noctalia.state.watch("close_done", function(token)
+  if visible and closeAskedAt ~= 0 and token == closeAskedAt then
     setVisible(false)
   end
 end)

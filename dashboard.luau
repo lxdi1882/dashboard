@@ -42,45 +42,38 @@ noctalia.state.watch("gh_done", function(_) ghLoading = false end)
 
 ------------------------------------------------------------------ actions
 
--- open/close animation: fade + slide, driven by time so it still lands if frame ticks are missed
+-- Animate from the current opacity so an interrupted fade can reverse smoothly.
 local ANIM_MS = 150
-local SLIDE = 28 -- spacer height; the card moves half of this
 local animStart = noctalia.nowMs()
-local animClosing = false
+local animFrom = 0
 local animStarted = false
-local closeCache = nil
+local closeToken = 0
+local layoutCache = nil
 layer.setNeedsFrameTick(true)
 
 local function animProgress()
-  local t = math.min(1, math.max(0, (noctalia.nowMs() - animStart) / ANIM_MS))
-  local e = 1 - (1 - t) * (1 - t) * (1 - t)
-  if animClosing then
-    return 1 - e
+  local target = closeToken == 0 and 1 or 0
+  local duration = ANIM_MS * math.abs(target - animFrom)
+  if duration == 0 then
+    return target
   end
-  return e
-end
-
-local function finishClose()
-  noctalia.state.set("close_req", noctalia.nowMs()) -- the service owns the open/closed flag
-  noctalia.layer.hide("screen")
+  local elapsed = animStarted and (noctalia.nowMs() - animStart) or 0
+  local t = math.min(1, math.max(0, elapsed / duration))
+  local eased = 1 - (1 - t) ^ 3
+  return animFrom + (target - animFrom) * eased
 end
 
 local function closeDash()
-  if animClosing then
-    return
-  end
-  animClosing = true
-  animStart = noctalia.nowMs()
-  layer.setNeedsFrameTick(true)
-  update()
+  noctalia.state.set("close_req", noctalia.nowMs())
 end
 
--- the service asks for an animated close (keybind / IPC)
-local lastAnimClose = noctalia.state.get("anim_close") or 0
 noctalia.state.watch("anim_close", function(v)
-  if v ~= nil and v ~= lastAnimClose then
-    lastAnimClose = v
-    closeDash()
+  if v ~= nil and v ~= closeToken then
+    animFrom = animProgress()
+    closeToken = v
+    animStarted = true
+    animStart = noctalia.nowMs()
+    layer.setNeedsFrameTick(true)
   end
 end)
 
@@ -1209,39 +1202,31 @@ local function outputGeometry()
   return nil
 end
 
+local function renderLayout(anim)
+  local c = layoutCache
+  layer.render(ui.column({
+    fill = string.format("scrim/%.2f", 0.55 * anim),
+    flexGrow = 1,
+    align = "center",
+    justify = "center",
+    onClick = closeDash,
+  }, {
+    ui.column({
+      opacity = anim,
+      width = c.w,
+      height = c.h,
+      fill = "surface",
+      radius = 26,
+      padding = c.pad,
+      gap = c.gap,
+      border = "outline_variant",
+      borderWidth = 1,
+      onClick = function() end,
+    }, c.kids),
+  }))
+end
+
 function update()
-  local anim = animProgress()
-  if animClosing and anim <= 0 then
-    finishClose()
-    return
-  end
-  if anim >= 1 and not animClosing then
-    layer.setNeedsFrameTick(false)
-  end
-  if animClosing and closeCache ~= nil then
-    local c = closeCache
-    layer.render(ui.column({
-      fill = string.format("scrim/%.2f", 0.55 * anim),
-      flexGrow = 1,
-      align = "center",
-      justify = "center",
-      onClick = closeDash,
-    }, {
-      ui.column({
-        opacity = anim,
-        width = c.w,
-        height = c.h,
-        fill = "surface",
-        radius = 26,
-        padding = c.pad,
-        gap = c.gap,
-        border = "outline_variant",
-        borderWidth = 1,
-        onClick = function() end,
-      }, c.kids),
-    }))
-    return
-  end
   local g = outputGeometry()
   local scale = (g ~= nil and g.scale ~= nil and g.scale > 0) and g.scale or 1
   local logicalW = g ~= nil and (g.width / scale) or 1280
@@ -1300,41 +1285,25 @@ function update()
     ui.row({ gap = colGap, flexGrow = 1 }, { left, right }),
     footer(),
   }
-  if anim >= 1 and not animClosing then
-    closeCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids }
-  end
-  local main = ui.column({
-    opacity = anim,
-    width = cardW,
-    height = cardH,
-    fill = "surface",
-    radius = 26,
-    padding = pad,
-    gap = colGap,
-    border = "outline_variant",
-    borderWidth = 1,
-    onClick = function() end,
-  }, kids)
-
-  layer.render(ui.column({
-    fill = string.format("scrim/%.2f", 0.55 * anim),
-    flexGrow = 1,
-    align = "center",
-    justify = "center",
-    onClick = closeDash,
-  }, {
-    main,
-  }))
+  layoutCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids }
+  renderLayout(animProgress())
 end
 
 function onFrameTick(_deltaMs)
   if not animStarted then
     animStarted = true
-    if not animClosing then
-      animStart = noctalia.nowMs() -- start the fade after the first heavy draw, not at script load
-    end
+    animStart = noctalia.nowMs()
   end
-  update()
+  local anim = animProgress()
+  if closeToken ~= 0 and anim <= 0 then
+    layer.setNeedsFrameTick(false)
+    noctalia.state.set("close_done", closeToken)
+    return
+  end
+  renderLayout(anim)
+  if closeToken == 0 and anim >= 1 then
+    layer.setNeedsFrameTick(false)
+  end
 end
 
 update()
