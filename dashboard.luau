@@ -150,7 +150,10 @@ end
 
 ------------------------------------------------------------------ small UI pieces
 
-local function sectionTitle(glyph, text, right, action)
+local maximizedCard = nil
+local screenHover = nil
+
+local function sectionTitle(glyph, text, right, action, id)
   local children = {
     ui.glyph({ name = glyph, size = 18, color = "primary" }),
     ui.label({ text = text, fontSize = 15, fontWeight = "bold", color = "on_surface" }),
@@ -161,6 +164,25 @@ local function sectionTitle(glyph, text, right, action)
   end
   if action ~= nil then
     table.insert(children, action)
+  end
+  if id ~= nil then
+    local expanded = maximizedCard == id
+    table.insert(children, ui.button({
+      key = "expand-" .. id,
+      text = expanded and "Back" or nil,
+      glyph = expanded and "arrow-left" or "arrows-maximize",
+      variant = "ghost",
+      controlSize = "sm",
+      tooltip = expanded and "Back to dashboard" or ("Maximize " .. text),
+      onClick = function()
+        maximizedCard = expanded and nil or id
+        if expanded then
+          maximizedCard = nil
+        end
+        screenHover = nil
+        update()
+      end,
+    }))
   end
   return ui.row({ gap = 8, align = "center" }, children)
 end
@@ -347,8 +369,8 @@ local function githubCard(inner, cell, gap, cardWidth)
   elseif gh ~= nil and gh.ok == true then
     right = gh.total .. " contributions · past year"
   end
-  return card({ width = cardWidth, padding = 14, gap = 8 }, {
-    sectionTitle("brand-github", "GitHub · " .. tostring(noctalia.getConfig("github_user")), right, ghRefreshButton()),
+  return card({ width = cardWidth, padding = 14, gap = 8, flexGrow = maximizedCard == "github" and 1 or nil }, {
+    sectionTitle("brand-github", "GitHub · " .. tostring(noctalia.getConfig("github_user")), right, ghRefreshButton(), "github"),
     body,
   })
 end
@@ -458,7 +480,7 @@ local function agendaCard()
     end
   end
   return card({ flexGrow = 1 }, {
-    sectionTitle("calendar-event", "Calendar", "next 10 days"),
+    sectionTitle("calendar-event", "Calendar", "next 10 days", nil, "calendar"),
     ui.scroll({ gap = 6, flexGrow = 1 }, rows),
   })
 end
@@ -469,13 +491,6 @@ end
 local screenRange = "today" -- "today" | "3d" | "14d"
 local screenDay = nil -- date opened from the 3-day or 14-day chart
 local screenSel = nil -- date and hour of the selected hourly bar
-local screenFocus = false -- apps list expanded to fill the card
-local screenHover = nil
-noctalia.state.watch("visible", function(v)
-  if not v then
-    screenFocus = false
-  end
-end)
 local RANGES = {
   { k = "today", label = "Today", n = 1 },
   { k = "3d", label = "3 days", n = 3 },
@@ -659,7 +674,7 @@ local function screenCard(innerW)
   local listRows = {}
   local listTitle = nil
   local otherSec = 0
-  local focusTotal, focusLabel = 0, ""
+  local screenFocus = maximizedCard == "screen"
   local controls
   local chartIndex
 
@@ -792,7 +807,6 @@ local function screenCard(innerW)
       statLabel, statValue = "apps used", tostring(n)
       heroLabel = "total · " .. selectedBar.label
     end
-    focusTotal, focusLabel = total, heroLabel
     table.insert(rows, ui.row({ align = "end", gap = 8 }, {
       ui.column({ gap = 0 }, {
         ui.label({ text = fmtDur(total), fontSize = HERO_FS, fontWeight = "bold", color = "on_surface" }),
@@ -898,23 +912,9 @@ local function screenCard(innerW)
     end
   end
 
-  local kids = { sectionTitle("device-desktop", "Screen time"), ui.column({ gap = 10 }, rows) }
+  local kids = { sectionTitle("device-desktop", "Screen time", nil, nil, "screen"), ui.column({ gap = 10 }, rows) }
   if listTitle ~= nil then
-    local headKids = { ui.label({ text = listTitle, fontSize = 11, fontWeight = "bold", color = "on_surface_variant", maxLines = 1, flexGrow = 1 }) }
-    if not screenFocus then
-      table.insert(headKids, ui.button({
-        glyph = "arrows-maximize",
-        variant = "ghost",
-        controlSize = "sm",
-        tooltip = "Expand",
-        onClick = function()
-          screenFocus = true
-          screenHover = nil
-          update()
-        end,
-      }))
-    end
-    table.insert(kids, ui.row({ gap = 6, align = "center" }, headKids))
+    table.insert(kids, ui.label({ text = listTitle, fontSize = 11, fontWeight = "bold", color = "on_surface_variant", maxLines = 1 }))
     if #listRows == 0 then
       table.insert(listRows, ui.label({ text = "Nothing recorded for this period.", fontSize = 12, color = "on_surface_variant" }))
     end
@@ -950,30 +950,8 @@ local function screenCard(innerW)
       }))
     end
   end
-  if screenFocus and listTitle ~= nil then
-    kids[1] = ui.row({ gap = 8, align = "center" }, {
-      ui.button({
-        glyph = "arrow-left",
-        variant = "ghost",
-        controlSize = "sm",
-        tooltip = "Back",
-        onClick = function()
-          screenFocus = false
-          update()
-        end,
-      }),
-      ui.label({ text = "Screen time", fontSize = 15, fontWeight = "bold", color = "on_surface" }),
-    })
-    kids[2] = ui.column({ gap = 10 }, {
-      controls,
-      ui.column({ gap = 0 }, {
-        ui.label({ text = fmtDur(focusTotal), fontSize = 28, fontWeight = "bold", color = "on_surface" }),
-        ui.label({ text = focusLabel, fontSize = 11, color = "on_surface_variant" }),
-      }),
-    })
-  end
   return { flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 },
-    kids, not screenFocus and chartIndex or nil, rows
+    kids, chartIndex, rows
 end
 
 local function renderScreenCard(innerW, props, kids, chartIndex, rows)
@@ -1144,8 +1122,8 @@ local function systemCard()
   if gov ~= nil then
     table.insert(rows, gov)
   end
-  return card({}, {
-    sectionTitle("cpu", "System"),
+  return card({ flexGrow = maximizedCard == "system" and 1 or nil }, {
+    sectionTitle("cpu", "System", nil, nil, "system"),
     ui.column({ gap = 10 }, rows),
   })
 end
@@ -1297,7 +1275,7 @@ local function todoCard(textWidth)
     end
   end
   return card({ flexGrow = 1 }, {
-    sectionTitle("list-check", "To do", right),
+    sectionTitle("list-check", "To do", right, nil, "todo"),
     ui.input({
       key = "todo-in-" .. inputGen,
       placeholder = "Add a task and press Enter…",
@@ -1407,13 +1385,15 @@ local agendaCache, screenCache, todoCache
 
 local function cachedAgendaCard()
   local today = os.date("%Y-%m-%d")
-  if agendaCache == nil or agendaCache.events ~= events or agendaCache.day ~= today then
-    agendaCache = { events = events, day = today, node = agendaCard() }
+  local expanded = maximizedCard == "calendar"
+  if agendaCache == nil or agendaCache.events ~= events or agendaCache.day ~= today or agendaCache.expanded ~= expanded then
+    agendaCache = { events = events, day = today, expanded = expanded, node = agendaCard() }
   end
   return agendaCache.node
 end
 
 local function cachedScreenCard(innerW)
+  local screenFocus = maximizedCard == "screen"
   if loadingMore then
     -- The loading indicator and its timeout depend on the clock.
     screenCache = nil
@@ -1438,11 +1418,43 @@ local function cachedScreenCard(innerW)
 end
 
 local function cachedTodoCard(textWidth)
+  local expanded = maximizedCard == "todo"
   if todoCache == nil or todoCache.todo ~= todo or todoCache.width ~= textWidth
-      or todoCache.inputGen ~= inputGen then
-    todoCache = { todo = todo, width = textWidth, inputGen = inputGen, node = todoCard(textWidth) }
+      or todoCache.inputGen ~= inputGen or todoCache.expanded ~= expanded then
+    todoCache = { todo = todo, width = textWidth, inputGen = inputGen, expanded = expanded, node = todoCard(textWidth) }
   end
   return todoCache.node
+end
+
+local function defaultLayout(leftW, rightW, todoTextW, screenInnerW, short, colGap)
+  local agendaNode = cachedAgendaCard()
+  local screenNode = cachedScreenCard(screenInnerW)
+  local todoNode = cachedTodoCard(todoTextW)
+
+  -- GitHub graph. "large" (default): card spans the column with big squares, System sits under To-do.
+  -- "compact": card hugs a small graph and System sits beside it.
+  local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
+  local left, right
+  if noctalia.getConfig("graph_size") == "compact" then
+    local ggap = 2
+    local cell = math.max(4, math.min(8, math.floor((leftW - 32 - 200 - colGap) / weeks) - ggap))
+    local ghInner = weeks * (cell + ggap) - ggap
+    left = ui.column({ gap = colGap, flexGrow = 3 }, {
+      ui.row({ gap = colGap, align = "stretch" }, { githubCard(ghInner, cell, ggap, ghInner + 28), systemCard() }),
+      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
+    })
+    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode })
+  else
+    local ggap = 3
+    local ghInner = leftW - 28
+    local cell = math.max(4, math.min(short and 9 or 13, math.floor(ghInner / weeks) - ggap))
+    left = ui.column({ gap = colGap, flexGrow = 3 }, {
+      githubCard(ghInner, cell, ggap, leftW),
+      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
+    })
+    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode, systemCard() })
+  end
+  return ui.row({ gap = colGap, flexGrow = 1 }, { left, right })
 end
 
 function update()
@@ -1474,38 +1486,30 @@ function update()
   local todoTextW = rightW - 32 - 24 - 90
   local screenInnerW = math.floor((leftW - colGap) / 2) - 32
 
-  local agendaNode = cachedAgendaCard()
-  local screenNode = cachedScreenCard(screenInnerW)
-  local todoNode = cachedTodoCard(todoTextW)
-
-  -- GitHub graph. "large" (default): card spans the column with big squares, System sits under To-do.
-  -- "compact": card hugs a small graph and System sits beside it.
-  local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
-  local left, right
-  if noctalia.getConfig("graph_size") == "compact" then
-    local ggap = 2
-    local cell = math.max(4, math.min(8, math.floor((leftW - 32 - 200 - colGap) / weeks) - ggap))
-    local ghInner = weeks * (cell + ggap) - ggap
-    left = ui.column({ gap = colGap, flexGrow = 3 }, {
-      ui.row({ gap = colGap, align = "stretch" }, { githubCard(ghInner, cell, ggap, ghInner + 28), systemCard() }),
-      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
-    })
-    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode })
+  local body
+  if maximizedCard == "screen" then
+    CHART_H = short and 84 or 124
+    HERO_FS = 32
+    body = cachedScreenCard(usable + colGap - 32)
+  elseif maximizedCard == "calendar" then
+    body = cachedAgendaCard()
+  elseif maximizedCard == "todo" then
+    body = cachedTodoCard(usable + colGap - 146)
+  elseif maximizedCard == "system" then
+    body = systemCard()
+  elseif maximizedCard == "github" then
+    local width = usable + colGap
+    local weeks = (gh ~= nil and gh.ok == true) and math.max(#gh.weeks, 1) or 53
+    local cell = math.max(4, math.min(16, math.floor((width - 28) / weeks) - 3))
+    body = githubCard(width - 28, cell, 3, width)
   else
-    local ggap = 3
-    local ghInner = leftW - 28
-    local cell = math.max(4, math.min(short and 9 or 13, math.floor(ghInner / weeks) - ggap))
-    left = ui.column({ gap = colGap, flexGrow = 3 }, {
-      githubCard(ghInner, cell, ggap, leftW),
-      ui.row({ gap = colGap, flexGrow = 1 }, { agendaNode, screenNode }),
-    })
-    right = ui.column({ gap = colGap, flexGrow = 2 }, { todoNode, systemCard() })
+    body = defaultLayout(leftW, rightW, todoTextW, screenInnerW, short, colGap)
   end
 
   local kids = {
     header(),
     ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
-    ui.row({ gap = colGap, flexGrow = 1 }, { left, right }),
+    body,
     footer(),
   }
   layoutCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids }
