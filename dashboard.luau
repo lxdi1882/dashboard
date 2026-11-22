@@ -822,7 +822,6 @@ local RANGES = {
 }
 
 local CHART_H = 84
-local AVATAR = 68
 local HERO_FS = 28
 
 local APP_COLORS = {
@@ -1946,46 +1945,88 @@ end
 
 ------------------------------------------------------------------ header
 
-local function avatarNode()
+local function avatarNode(size, border)
+  local radius = math.floor(size / 2)
   if profile ~= nil and profile.avatar ~= nil and profile.avatar ~= "" then
-    return ui.image({ path = profile.avatar, width = AVATAR, height = AVATAR, radius = math.floor(AVATAR / 2), fit = "cover" })
+    return ui.image({
+      path = profile.avatar, width = size, height = size, radius = radius, fit = "cover",
+      border = border, borderWidth = 2,
+    })
   end
-  local initial = "?"
-  if profile ~= nil and profile.name ~= nil and profile.name ~= "" then
-    initial = string.upper(string.sub(profile.name, 1, 1))
-  end
+  local name = profile and profile.name or ""
+  local initial = name ~= "" and string.upper(string.sub(name, 1, 1)) or "?"
   return ui.column({
-    width = AVATAR,
-    height = AVATAR,
-    radius = math.floor(AVATAR / 2),
-    fill = "primary_container",
-    align = "center",
-    justify = "center",
+    width = size, height = size, radius = radius,
+    fill = "primary_container", border = border, borderWidth = 2,
+    align = "center", justify = "center",
   }, {
-    ui.label({ text = initial, fontSize = 28, fontWeight = "bold", color = "on_primary_container" }),
+    ui.label({ text = initial, fontSize = 24, fontWeight = "bold", color = "on_primary_container" }),
   })
 end
 
-local function header(width)
-  local name = (profile ~= nil and profile.name) or ""
-  local screenText = (screen ~= nil and screen.ok == true) and (fmtDur(screen.sec) .. " screen time") or "Screen time"
-  return ui.row({ gap = 16, align = "center" }, {
-    avatarNode(),
-    ui.column({ gap = 6, justify = "center" }, {
-      ui.label({ text = greeting() .. ",", fontSize = 13, color = "on_surface_variant" }),
-      ui.label({ text = name, fontSize = 26, fontWeight = "bold", color = "on_surface" }),
+local function profileBanner(width, height, monitor)
+  local wallpaper = monitor and noctalia.wallpaperPath(monitor)
+  local hasWallpaper = type(wallpaper) == "string" and wallpaper ~= ""
+  local radius = 17
+  local foreground = hasWallpaper and "#ffffff" or "on_surface"
+  local secondary = hasWallpaper and "#e3e7ef" or "on_surface_variant"
+  local border = hasWallpaper and "#ffffff66" or "outline_variant"
+  local avatarSize = height - 20
+  local layers = {}
+  if hasWallpaper then
+    table.insert(layers, ui.image({
+      key = "profile-wallpaper", path = wallpaper, width = width, height = height,
+      fit = "cover", radius = radius, opacity = 0.38,
+    }))
+  end
+  table.insert(layers, ui.row({
+    key = "profile-content", height = height, translateY = hasWallpaper and -height or 0,
+    gap = 12, paddingH = 12, align = "center",
+  }, {
+    avatarNode(avatarSize, border),
+    ui.column({ gap = 2, flexGrow = 1, justify = "center", clip = true }, {
+      ui.label({ text = greeting() .. ",", fontSize = 11, color = secondary, maxLines = 1 }),
+      ui.label({
+        text = profile and profile.name or "", fontSize = height >= 78 and 23 or 20,
+        fontWeight = "bold", color = foreground, maxLines = 1,
+      }),
+      ui.label({ text = "Up " .. fmtUptime(uptimeSec), fontSize = 11, color = secondary, maxLines = 1 }),
     }),
-    ui.row({ gap = 8, align = "center", visible = width >= 630 }, {
-      chip("clock", "Up " .. fmtUptime(uptimeSec), nil),
-      chip("device-desktop", screenText, nil),
+  }))
+  return ui.column({
+    key = "profile-banner", width = width, height = height, radius = radius, clip = true,
+    fill = hasWallpaper and "#10141b" or "surface_container",
+  }, layers)
+end
+
+local function header(width, height, monitor)
+  local compact = width < 630
+  local showDate = width >= 440
+  local reserve = showDate and 176 or 120
+  local bannerWidth = compact and math.max(1, width - reserve)
+    or math.min(540, math.floor(width * 0.49))
+  local kids = { profileBanner(bannerWidth, height, monitor) }
+  if not compact and screen ~= nil and screen.ok then
+    table.insert(kids, chip("device-desktop", fmtDur(screen.sec) .. " screen time", nil))
+  end
+  table.insert(kids, ui.spacer({ flexGrow = 1 }))
+  local clock = {
+    ui.label({
+      text = os.date("%H:%M"), fontSize = compact and 30 or 40, fontWeight = "bold",
+      color = "primary", textAlign = "right",
     }),
-    ui.spacer({ flexGrow = 1 }),
-    ui.column({ gap = 2, align = "end", justify = "center" }, {
-      ui.label({ text = os.date("%H:%M"), fontSize = 40, fontWeight = "bold", color = "primary", textAlign = "right" }),
-      ui.label({ text = os.date("%A, %B %d"), fontSize = 13, color = "on_surface_variant", textAlign = "right" }),
-    }),
-    ui.button({ glyph = "x", variant = "ghost", tooltip = "Close", onClick = closeDash }),
-  })
+  }
+  if showDate then
+    table.insert(clock, ui.label({
+      text = os.date("%A, %B %d"), fontSize = compact and 11 or 13,
+      color = "on_surface_variant", textAlign = "right", maxLines = 1,
+    }))
+  end
+  table.insert(kids, ui.column({ gap = 2, align = "end", justify = "center" }, clock))
+  table.insert(kids, ui.button({
+    key = "close-dashboard", glyph = "x", variant = "ghost", controlSize = "sm", tooltip = "Close", onClick = closeDash,
+  }))
+  return ui.row({ gap = compact and 8 or 14, align = "center" }, kids)
 end
 
 local function footer()
@@ -2258,7 +2299,6 @@ function update()
 
   local short = cardH < 760
   CHART_H = math.clamp(math.floor((cardH - 430) / 4), 32, 84)
-  AVATAR = short and 48 or 68
   HERO_FS = short and 20 or 28
   local pad, colGap = 22, 14
   if short then
@@ -2294,7 +2334,7 @@ function update()
   end
 
   local kids = {
-    ui.column({ height = headerHeight }, { header(width) }),
+    ui.column({ height = headerHeight }, { header(width, headerHeight, g and g.name or layer.outputName()) }),
     ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
     body,
     ui.column({ height = 32 }, { footer() }),
