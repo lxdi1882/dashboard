@@ -28,6 +28,7 @@ local screen = noctalia.state.get("screen")
 local events = noctalia.state.get("events")
 local uptimeSec = noctalia.state.get("uptime")
 local profile = noctalia.state.get("profile")
+local weather = noctalia.state.get("weather")
 local gridCache = nil
 local gridKey = ""
 local hoverDay = nil -- { d = "YYYY-MM-DD", c = count }
@@ -50,6 +51,7 @@ end)
 noctalia.state.watch("events", function(v) events = v end)
 noctalia.state.watch("uptime", function(v) uptimeSec = v end)
 noctalia.state.watch("profile", function(v) profile = v end)
+noctalia.state.watch("weather", function(v) weather = v end)
 local ghCommits = noctalia.state.get("gh_commits")
 noctalia.state.watch("gh_commits", function(v) ghCommits = v end)
 noctalia.state.watch("gh_done", function(_) ghLoading = false end)
@@ -2094,9 +2096,62 @@ local function profileBanner(width, height, monitor, stacked)
   }, layers)
 end
 
+-- WMO weather codes used in the shell's Open-Meteo cache.
+local weatherConditions = {
+  [0] = "clear", [1] = "clear", [2] = "partly", [3] = "cloudy",
+  [45] = "fog", [48] = "fog",
+  [51] = "drizzle", [53] = "drizzle", [55] = "drizzle", [56] = "ice", [57] = "ice",
+  [61] = "rain", [63] = "rain", [65] = "rain", [66] = "ice", [67] = "ice",
+  [71] = "snow", [73] = "snow", [75] = "snow", [77] = "snow",
+  [80] = "showers", [81] = "showers", [82] = "showers", [85] = "snow", [86] = "snow",
+  [95] = "storm", [96] = "storm", [97] = "storm", [99] = "storm",
+}
+local weatherStyles = {
+  clear = { "sun", "Clear", "moon" },
+  partly = { "cloud-sun", "Partly cloudy", "cloud-moon" },
+  cloudy = { "cloud", "Overcast" },
+  fog = { "cloud-fog", "Fog" },
+  drizzle = { "cloud-rain", "Drizzle" },
+  ice = { "cloud-snow", "Freezing rain" },
+  rain = { "cloud-rain", "Rain" },
+  showers = { "cloud-rain", "Showers" },
+  snow = { "cloud-snow", "Snow" },
+  storm = { "cloud-storm", "Thunderstorms" },
+}
+
+local function currentWeather()
+  local style = weatherStyles[weatherConditions[weather.code]]
+  local glyph = style and (not weather.day and style[3] or style[1]) or "cloud"
+  local readings = {
+    ui.label({
+      key = "weather-temperature", text = weather.temperature .. "°" .. weather.unit,
+      fontSize = 25, fontWeight = "bold", color = "on_surface", maxLines = 1,
+    }),
+  }
+  if style ~= nil then
+    local detail = style[2]
+    if weather.low ~= nil and weather.high ~= nil then
+      detail = detail .. " · " .. weather.low .. "° / " .. weather.high .. "°"
+    end
+    table.insert(readings, ui.label({
+      key = "weather-conditions", text = detail, fontSize = 11, color = "on_surface", maxLines = 1,
+    }))
+  end
+  if weather.city ~= nil then
+    table.insert(readings, ui.label({
+      key = "weather-city", text = weather.city, fontSize = 11, color = "on_surface_variant", maxLines = 1,
+    }))
+  end
+  return ui.row({ key = "header-weather", width = 202, gap = 9, align = "center" }, {
+    ui.glyph({ name = glyph, size = 38, color = "primary" }),
+    ui.column({ flexGrow = 1, gap = 1, justify = "center", clip = true }, readings),
+  })
+end
+
 local function header(width, height, monitor, stacked)
   local showDate = width >= 440
-  local reserve = showDate and 176 or 120
+  local showWeather = weather ~= nil and width >= 960
+  local reserve = showWeather and 440 or (showDate and 176 or 120)
   local bannerWidth = math.max(1, math.min(680, width - reserve))
   local compact = width < 630
   local kids = { profileBanner(bannerWidth, height, monitor, stacked) }
@@ -2110,10 +2165,24 @@ local function header(width, height, monitor, stacked)
   if showDate then
     table.insert(clock, ui.label({
       text = os.date("%A, %B %d"), fontSize = compact and 11 or 13,
-      color = "on_surface_variant", textAlign = "right", maxLines = 1,
+      color = "on_surface_variant", textAlign = "right", maxLines = 1, maxWidth = 132,
     }))
   end
-  table.insert(kids, ui.column({ gap = 2, align = "end", justify = "center" }, clock))
+  local clockColumn = ui.column({
+    width = showWeather and 132 or nil, gap = 2, align = "end", justify = "center",
+  }, clock)
+  if showWeather then
+    table.insert(kids, ui.row({
+      key = "weather-clock", height = height, paddingH = 12, gap = 12, align = "center",
+      radius = 17, fill = "surface_container",
+    }, {
+      currentWeather(),
+      ui.box({ width = 1, height = 44, fill = "outline_variant" }),
+      clockColumn,
+    }))
+  else
+    table.insert(kids, clockColumn)
+  end
   table.insert(kids, ui.button({
     key = "close-dashboard", glyph = "x", variant = "ghost", controlSize = "sm", tooltip = "Close", onClick = closeDash,
   }))

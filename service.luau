@@ -529,6 +529,54 @@ local function loadGithubCache()
   end)
 end
 
+------------------------------------------------------------------ weather
+
+-- Reuse Noctalia's Open-Meteo disk cache. The dashboard never fetches weather itself.
+local weatherBusy = false
+local function refreshWeather()
+  if weatherBusy then return end
+  if noctalia.getSetting("weather.enabled") ~= true then
+    noctalia.state.set("weather", nil)
+    return
+  end
+  local cacheHome = noctalia.getenv("XDG_CACHE_HOME")
+  if cacheHome == nil or cacheHome == "" then cacheHome = noctalia.expandPath("~/.cache") end
+  local maxAge = math.max(90, (noctalia.getSetting("weather.refresh_minutes") or 30) * 3) * 60
+  local imperial = noctalia.getSetting("weather.unit") == "imperial"
+  weatherBusy = true
+  readJson(cacheHome .. "/noctalia/weather.json", function(data)
+    weatherBusy = false
+    local snapshot = type(data) == "table" and data.snapshot
+    local current = type(snapshot) == "table" and snapshot.current
+    if type(current) ~= "table" or snapshot.valid ~= true
+        or type(snapshot.fetched_at) ~= "number" or type(current.temperature_c) ~= "number"
+        or noctalia.nowMs() / 1000 - snapshot.fetched_at > maxAge then
+      noctalia.state.set("weather", nil)
+      return
+    end
+
+    local function degrees(c)
+      if type(c) ~= "number" then return nil end
+      return math.floor((imperial and (c * 9 / 5 + 32) or c) + 0.5)
+    end
+    local today = type(current.time_iso) == "string" and string.sub(current.time_iso, 1, 10)
+    local low, high
+    if today and type(snapshot.forecast_days) == "table" then
+      for _, day in ipairs(snapshot.forecast_days) do
+        if type(day) == "table" and day.date_iso == today then
+          low, high = degrees(day.temperature_min_c), degrees(day.temperature_max_c)
+          break
+        end
+      end
+    end
+    noctalia.state.set("weather", {
+      temperature = degrees(current.temperature_c), code = current.weather_code, day = current.is_day == true,
+      unit = imperial and "F" or "C", low = low, high = high,
+      city = type(snapshot.location_name) == "string" and string.match(snapshot.location_name, "^[^,]+") or nil,
+    })
+  end)
+end
+
 ------------------------------------------------------------------ orchestration
 
 local function refreshAll()
@@ -538,6 +586,7 @@ local function refreshAll()
   refreshCalendar()
   if visible then
     refreshScreenTime()
+    refreshWeather()
   end
 end
 
@@ -645,6 +694,9 @@ function update()
     end
     if tick % 6 == 1 then
       refreshCalendar()
+    end
+    if tick % 12 == 1 then
+      refreshWeather()
     end
   end
   local now = noctalia.nowMs()
