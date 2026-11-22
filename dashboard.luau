@@ -6,6 +6,7 @@ noctalia.log("dashboard layer started")
 
 local Todo = require("./lib/todo.luau")
 local Layout = require("./lib/layout.luau")
+local Calendar = require("./lib/calendar.luau")
 
 local function compactGraph()
   return noctalia.getConfig("graph_size") == "compact"
@@ -183,6 +184,12 @@ end
 ------------------------------------------------------------------ small UI pieces
 
 local maximizedCard = nil
+local calendarSelection = nil
+local calendarPane = "month"
+
+local function requestCalendarMonth(month)
+  noctalia.state.set("calendar_month_req", { month = month, at = noctalia.nowMs() })
+end
 local screenHover = nil
 local githubFeed = "commits"
 local ghRepos = noctalia.state.get("gh_repos")
@@ -196,6 +203,10 @@ local function maximize(id)
   if id == "github" then
     githubFeed = "commits"
     noctalia.state.set("gh_repos_req", { at = noctalia.nowMs(), force = false })
+  elseif id == "calendar" then
+    calendarSelection = nil
+    calendarPane = "month"
+    requestCalendarMonth(os.date("%Y-%m-01"))
   end
   update()
 end
@@ -671,113 +682,231 @@ end
 
 ------------------------------------------------------------------ agenda (grouped by day)
 
-local function dayTitle(key)
-  if key == os.date("%Y-%m-%d") then
-    return "Today"
+local function calendarEventRow(event, day, index, compact)
+  local time
+  if event.allDay then
+    time = "All day"
+  else
+    local start, finish = Calendar.dayBounds(day)
+    local from = os.date("%H:%M", math.floor(event.startMs / 1000))
+    local untilTime = os.date("%H:%M", math.floor(event.endMs / 1000))
+    if event.startMs < start then
+      time = event.endMs >= finish and "Ongoing" or ("Until " .. untilTime)
+    else
+      time = event.endMs >= finish and ("From " .. from) or (from .. "–" .. untilTime)
+    end
   end
-  if key == os.date("%Y-%m-%d", os.time() + 86400) then
-    return "Tomorrow"
-  end
-  return os.date("%A", dateToTime(key))
-end
-
-local function dayHeader(key, count)
-  local isToday = key == os.date("%Y-%m-%d")
-  local t = dateToTime(key)
-  local sub = count > 0 and (count .. (count == 1 and " event" or " events")) or "Nothing scheduled"
-  return ui.row({ gap = 10, align = "center", paddingV = 2 }, {
-    ui.column({
-      width = 42,
-      height = 42,
-      radius = 12,
-      fill = isToday and "primary" or "surface_container_high",
-      align = "center",
-      justify = "center",
-      gap = 0,
-    }, {
-      ui.label({ text = string.upper(os.date("%a", t)), fontSize = 9, color = isToday and "on_primary" or "on_surface_variant" }),
-      ui.label({ text = os.date("%d", t), fontSize = 16, fontWeight = "bold", color = isToday and "on_primary" or "on_surface" }),
-    }),
-    ui.column({ gap = 0 }, {
-      ui.label({ text = dayTitle(key) .. " · " .. os.date("%B %d", t), fontSize = 13, fontWeight = "bold", color = "on_surface" }),
-      ui.label({ text = sub, fontSize = 11, color = "on_surface_variant" }),
-    }),
-  })
-end
-
-local function eventRow(e, i)
-  local startSec = math.floor(e.startMs / 1000)
-  local endSec = math.floor(e.endMs / 1000)
-  local timeText = e.allDay and "All day" or (os.date("%H:%M", startSec) .. "–" .. os.date("%H:%M", endSec))
-  local dot = (e.color ~= nil and e.color ~= "") and e.color or "primary"
-  local link = e.url or ""
-  local titleCol = {
-    ui.label({ text = e.title, fontSize = 13, fontWeight = "bold", color = "on_surface", maxLines = 1 }),
+  local accent = event.color ~= nil and event.color ~= "" and event.color or "primary"
+  local link = event.url or ""
+  local title = event.title ~= "" and event.title or "Untitled event"
+  local text = {
+    ui.label({ text = title, fontSize = 13, fontWeight = "bold", color = "on_surface", maxLines = compact and 1 or 2 }),
+    ui.label({ text = time, fontSize = 11, color = "on_surface_variant", maxLines = 1 }),
   }
-  if e.location ~= nil and e.location ~= "" then
-    table.insert(titleCol, ui.label({ text = e.location, fontSize = 11, color = "on_surface_variant", maxLines = 1 }))
+  if not compact and event.location ~= nil and event.location ~= ""
+      and not string.match(event.location, "^https?://") then
+    table.insert(text, ui.label({ text = event.location, fontSize = 11, color = "on_surface_variant", maxLines = 1 }))
   end
   local children = {
-    ui.label({ text = timeText, fontSize = 12, color = "on_surface_variant", minWidth = 84 }),
-    ui.box({ width = 3, height = 28, radius = 2, fill = dot }),
-    ui.column({ gap = 1, flexGrow = 1 }, titleCol),
+    ui.box({ width = 3, height = compact and 27 or 35, radius = 2, fill = accent }),
+    ui.column({ gap = 0, flexGrow = 1, clip = true }, text),
   }
-  if link ~= "" then
-    table.insert(children, ui.glyph({ name = "video", size = 16, color = "primary" }))
-  end
+  if link ~= "" then table.insert(children, ui.glyph({ name = "external-link", size = 14, color = "on_surface_variant" })) end
   return ui.row({
-    key = "e" .. i,
-    gap = 10,
-    align = "center",
-    paddingH = 8,
-    paddingV = 4,
-    radius = 10,
-    fill = "surface_container_high/0.6",
+    key = "calendar-event-" .. tostring(event.id or "") .. "-" .. index,
+    gap = 9, paddingH = 8, paddingV = compact and 4 or 7, align = "center",
+    radius = 8, fill = "surface_container_high",
     onClick = link ~= "" and function() openUrl(link) end or nil,
-    tooltip = link ~= "" and "Open meeting link" or nil,
+    tooltip = link ~= "" and "Open event link" or nil,
   }, children)
 end
 
-local function agendaCard()
+local function calendarAgenda(day, items, empty, compact)
   local rows = {}
-  if events == nil or events.synced ~= true then
-    table.insert(rows, ui.label({
-      text = "Calendar not synced yet. Add an account in Settings → Calendar.",
-      fontSize = 13,
-      color = "on_surface_variant",
-      maxLines = 3,
-    }))
+  if #items == 0 then
+    table.insert(rows, ui.label({ text = empty, fontSize = 12, color = "on_surface_variant", maxLines = 2 }))
   else
-    -- group by local date, keeping order
-    local order, groups = {}, {}
-    for i, e in ipairs(events.items) do
-      local key = os.date("%Y-%m-%d", math.floor(e.startMs / 1000))
-      if groups[key] == nil then
-        groups[key] = {}
-        table.insert(order, key)
-      end
-      table.insert(groups[key], { e = e, i = i })
-    end
-    local todayKey = os.date("%Y-%m-%d")
-    if groups[todayKey] == nil then
-      table.insert(order, 1, todayKey)
-      groups[todayKey] = {}
-    end
-    for gi, key in ipairs(order) do
-      if gi > 1 then
-        table.insert(rows, ui.separator({ thickness = 1, color = "outline_variant/0.4", spacing = 6 }))
-      end
-      table.insert(rows, dayHeader(key, #groups[key]))
-      for _, item in ipairs(groups[key]) do
-        table.insert(rows, eventRow(item.e, item.i))
-      end
+    for index, event in ipairs(items) do
+      table.insert(rows, calendarEventRow(event, day, index, compact))
     end
   end
-  return card({ flexGrow = 1 }, {
-    sectionTitle("calendar-event", "Calendar", "next 10 days", nil, "calendar"),
-    ui.scroll({ gap = 6, flexGrow = 1 }, rows),
+  return ui.scroll({ key = "calendar-agenda-" .. day, flexGrow = 1, gap = 5 }, rows)
+end
+
+local function todayCalendar(today, height)
+  local synced = events ~= nil and events.synced == true
+  local items = synced and Calendar.eventsOn(events.items, today) or {}
+  local kids = { sectionTitle("calendar-event", "Calendar", "Today", nil, "calendar") }
+  if synced and #items > 0 and height < 142 then
+    local first = items[1]
+    local title = first.title ~= "" and first.title or "Untitled event"
+    local time = first.allDay and "All day" or os.date("%H:%M", math.floor(first.startMs / 1000))
+    local extra = #items > 1 and (" · +" .. (#items - 1) .. " more") or ""
+    table.insert(kids, ui.label({ text = title, height = 19, fontSize = 13, fontWeight = "bold", color = "on_surface", maxLines = 1 }))
+    table.insert(kids, ui.label({ text = time .. extra, height = 16, fontSize = 11, color = "on_surface_variant", maxLines = 1 }))
+  else
+    table.insert(kids, calendarAgenda(today, items, synced and "Nothing scheduled today" or "Calendar not synced", true))
+  end
+  return card({ flexGrow = 1, padding = 10, gap = 4 }, kids)
+end
+
+local function selectCalendarDay(day, openAgenda)
+  local previous = calendarSelection or os.date("%Y-%m-%d")
+  calendarSelection = day
+  if Calendar.monthStart(previous) ~= Calendar.monthStart(day) then
+    requestCalendarMonth(Calendar.monthStart(day))
+  end
+  if openAgenda then calendarPane = "agenda" end
+  update()
+end
+
+local function calendarMonthGrid(width, height, month, selected, today, items, openAgenda)
+  local pad = 10
+  local gap = 4
+  local usable = width - 2 * pad
+  local cellWidth = math.max(1, math.floor((usable - 6 * gap) / 7))
+  local cellHeight = math.clamp(math.floor((height - 104) / 6), 22, 71)
+  local headers = {}
+  for _, name in ipairs({ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" }) do
+    table.insert(headers, ui.column({ width = cellWidth, height = 18, align = "center", justify = "center" }, {
+      ui.label({ text = name, fontSize = 11, baseline = "inkCentered", color = "on_surface_variant" }),
+    }))
+  end
+  local weeks = {}
+  local day = Calendar.gridStart(month)
+  for week = 1, 6 do
+    local cells = {}
+    for weekday = 1, 7 do
+      local key = day
+      day = Calendar.shiftDay(day, 1)
+      local active = key == selected
+      local inMonth = Calendar.monthStart(key) == month
+      local isToday = key == today
+      local dayEvents = Calendar.eventsOn(items, key)
+      local markers = {}
+      for i = 1, math.min(3, #dayEvents) do
+        local color = dayEvents[i].color
+        table.insert(markers, ui.box({
+          width = 4, height = 4, radius = 2,
+          fill = color ~= nil and color ~= "" and color or "primary",
+        }))
+      end
+      local dateLabel = os.date("%A, %B %d", dateToTime(key))
+      local eventCount = #dayEvents
+      if eventCount > 0 then
+        dateLabel = dateLabel .. " · " .. eventCount .. (eventCount == 1 and " event" or " events")
+      end
+      table.insert(cells, ui.column({
+        key = "calendar-day-" .. key, width = cellWidth, height = cellHeight, radius = 8,
+        gap = cellHeight >= 36 and 3 or 1, align = "center", justify = "center",
+        tooltip = dateLabel, onClick = function() selectCalendarDay(key, openAgenda) end,
+      }, {
+        ui.column({
+          width = math.min(30, cellWidth), height = cellHeight >= 36 and 24 or 17,
+          radius = 7, align = "center", justify = "center",
+          fill = active and "primary" or "surface/0",
+          border = isToday and not active and "primary" or nil, borderWidth = isToday and not active and 1 or nil,
+        }, {
+          ui.label({
+            text = tostring(tonumber(string.sub(key, 9, 10))), fontSize = cellHeight >= 36 and 14 or 12,
+            baseline = "inkCentered", fontWeight = (active or isToday) and "bold" or "normal",
+            color = active and "on_primary" or (inMonth and "on_surface" or "on_surface_variant/0.68"),
+          }),
+        }),
+        ui.row({ height = 4, gap = 3, align = "center", justify = "center" }, markers),
+      }))
+    end
+    table.insert(weeks, ui.row({ key = "calendar-week-" .. week, height = cellHeight, gap = gap, justify = "center" }, cells))
+  end
+
+  local function changeMonth(delta)
+    local nextMonth = Calendar.shiftMonth(month, delta)
+    selectCalendarDay(nextMonth == Calendar.monthStart(today) and today or nextMonth, false)
+  end
+  local function arrow(delta, glyph, tooltip)
+    return ui.button({
+      key = delta < 0 and "calendar-prev-month" or "calendar-next-month",
+      glyph = glyph, width = 32, height = 32, variant = "ghost", tooltip = tooltip,
+      onClick = function() changeMonth(delta) end,
+    })
+  end
+  local weeksView = height < 236 and ui.scroll({ gap = gap, flexGrow = 1 }, weeks)
+    or ui.column({ gap = gap }, weeks)
+  return card({ key = "calendar-month", width = width, height = height, padding = pad, gap = 6, clip = true }, {
+    ui.row({ height = 32, gap = 6, align = "center" }, {
+      arrow(-1, "chevron-left", "Previous month"),
+      ui.label({
+        key = "calendar-month-label", text = os.date("%B %Y", dateToTime(month)),
+        fontSize = 17, fontWeight = "bold", flexGrow = 1, textAlign = "center", maxLines = 1,
+      }),
+      arrow(1, "chevron-right", "Next month"),
+    }),
+    ui.row({ height = 18, gap = gap, justify = "center" }, headers),
+    weeksView,
   })
 end
+
+local function calendarDetails(width, height, today, selected)
+  local month = Calendar.monthStart(selected)
+  local synced = events ~= nil and events.synced == true
+  local loaded = synced and events.month == month
+  local monthItems = loaded and events.monthItems or {}
+  local selectedItems = Calendar.eventsOn(loaded and monthItems or (synced and events.items or {}), selected)
+  local empty = not synced and "Calendar not synced" or not loaded and "Loading events…" or "Nothing scheduled"
+  local wide = width >= 700 and height >= 325
+  local stacked = not wide and height >= 480
+  local tabbed = not wide and not stacked
+  local paneHeight = math.max(1, height - (tabbed and 78 or 40))
+  local monthWidth = wide and math.floor((width - 10) * 0.58) or width
+  local monthHeight = stacked and math.floor((paneHeight - 8) * 0.64) or paneHeight
+
+  local function agenda(widthHint, heightHint)
+    return card({ key = "calendar-day-agenda", width = widthHint, height = heightHint, padding = 10, gap = 7, clip = true }, {
+      ui.label({
+        key = "calendar-selected-day", text = (selected == today and "Today · " or "") .. os.date("%a, %b %d", dateToTime(selected)),
+        fontSize = 15, fontWeight = "bold", color = "on_surface", maxLines = 1,
+      }),
+      calendarAgenda(selected, selectedItems, empty, false),
+    })
+  end
+  local todayButton = ui.button({
+    key = "calendar-today", text = "Today", variant = "ghost", controlSize = "sm", tooltip = "Jump to today",
+    onClick = function()
+      if tabbed then calendarPane = "month" end
+      selectCalendarDay(today, false)
+    end,
+  })
+  local kids = { sectionTitle("calendar-event", "Calendar", nil, todayButton, "calendar") }
+
+  if tabbed then
+    local function tab(id, label)
+      return ui.button({
+        key = "calendar-tab-" .. id, text = label, controlSize = "sm",
+        variant = calendarPane == id and "primary" or "ghost",
+        onClick = function()
+          calendarPane = id
+          update()
+        end,
+      })
+    end
+    table.insert(kids, ui.row({ height = 30, gap = 6 }, { tab("month", "Month"), tab("agenda", "Agenda") }))
+    if calendarPane == "agenda" then
+      table.insert(kids, agenda(width, paneHeight))
+    else
+      table.insert(kids, calendarMonthGrid(monthWidth, monthHeight, month, selected, today, monthItems, true))
+    end
+  elseif wide then
+    table.insert(kids, ui.row({ height = paneHeight, gap = 10 }, {
+      calendarMonthGrid(monthWidth, monthHeight, month, selected, today, monthItems, false),
+      agenda(width - monthWidth - 10, paneHeight),
+    }))
+  else
+    table.insert(kids, calendarMonthGrid(monthWidth, monthHeight, month, selected, today, monthItems, false))
+    table.insert(kids, agenda(width, paneHeight - monthHeight - 8))
+  end
+  return ui.column({ width = width, height = height, gap = 8 }, kids)
+end
+
 
 ------------------------------------------------------------------ screen time (mirrors Noctalia's own Screen Time tab)
 
@@ -2315,11 +2444,17 @@ end
 
 local agendaCache, screenCache, todoCache
 
-local function cachedAgendaCard()
+local function cachedAgendaCard(width, height)
   local today = os.date("%Y-%m-%d")
   local expanded = maximizedCard == "calendar"
-  if agendaCache == nil or agendaCache.events ~= events or agendaCache.day ~= today or agendaCache.expanded ~= expanded then
-    agendaCache = { events = events, day = today, expanded = expanded, node = agendaCard() }
+  local day = expanded and (calendarSelection or today) or today
+  if agendaCache == nil or agendaCache.events ~= events or agendaCache.today ~= today or agendaCache.day ~= day
+      or agendaCache.expanded ~= expanded or agendaCache.width ~= width or agendaCache.height ~= height
+      or agendaCache.pane ~= calendarPane then
+    agendaCache = {
+      events = events, today = today, day = day, expanded = expanded, width = width, height = height, pane = calendarPane,
+      node = expanded and calendarDetails(width, height, today, day) or todayCalendar(today, height),
+    }
   end
   return agendaCache.node
 end
@@ -2407,11 +2542,7 @@ local function gridCard(id, w, h)
     end
     return cachedTodoCard(math.max(48, w - 146))
   elseif id == "calendar" then
-    if h < 159 then
-      local detail = events and events.synced and (#events.items .. " upcoming events") or "Calendar not synced"
-      return summaryCard(id, detail)
-    end
-    return cachedAgendaCard()
+    return cachedAgendaCard(w, h)
   end
   if w < 210 or h < 151 then
     local stats = noctalia.systemStats()
@@ -2545,7 +2676,7 @@ function update()
     screenBody = function() return cachedScreenCard(innerW, sidebarWidth) end
     body = screenBody()
   elseif maximizedCard == "calendar" then
-    body = cachedAgendaCard()
+    body = cachedAgendaCard(width, height)
   elseif maximizedCard == "todo" then
     body = cachedTodoCard(math.max(48, width - 146))
   elseif maximizedCard == "system" then

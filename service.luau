@@ -5,12 +5,12 @@
 noctalia.setUpdateInterval(5000)
 
 local Todo = require("./lib/todo.luau")
+local Calendar = require("./lib/calendar.luau")
 
 local tick = 0
 local lastGithub = 0
 local visible = false
 local closeAskedAt = 0
-local DAY_MS = 86400000
 
 ------------------------------------------------------------------ helpers
 
@@ -163,52 +163,51 @@ end
 
 ------------------------------------------------------------------ calendar
 
+local calendarMonth = nil
+
 local function refreshCalendar()
-  local ev = noctalia.calendarEvents()
-  if ev == nil then
+  local source = noctalia.calendarEvents()
+  if source == nil then
     noctalia.state.set("events", { synced = false, items = {} })
     return
   end
-  local now = noctalia.nowMs()
-  local list = {}
-  for _, e in ipairs(ev) do
-    if e.endMs > now and e.startMs < now + 10 * DAY_MS then
-      table.insert(list, e)
+  local today = os.date("%Y-%m-%d")
+  local horizon = Calendar.shiftDay(today, 10)
+  local month = calendarMonth or Calendar.monthStart(today)
+  local gridFirst = Calendar.gridStart(month)
+  local gridLast = Calendar.shiftDay(gridFirst, 41)
+  local items, monthItems = {}, {}
+  for _, event in ipairs(source) do
+    local first, last = Calendar.eventDays(event)
+    local inAgenda = last >= today and first <= horizon
+    local inMonth = last >= gridFirst and first <= gridLast
+    if inAgenda or inMonth then
+      local item = {
+        id = event.id, title = event.title or "", startMs = event.startMs, endMs = event.endMs,
+        firstDay = first, lastDay = last, allDay = event.allDay == true,
+        color = event.colorHex or "", url = event.url or "", location = event.location or "",
+      }
+      if inAgenda then table.insert(items, item) end
+      if inMonth then table.insert(monthItems, item) end
     end
   end
-  table.sort(list, function(a, b)
-    if a.allDay ~= b.allDay then
-      return a.allDay
-    end
-    return a.startMs < b.startMs
-  end)
-  -- keep chronological by day, all-day first within a day
-  table.sort(list, function(a, b)
-    local da = os.date("%Y-%m-%d", math.floor(a.startMs / 1000))
-    local db = os.date("%Y-%m-%d", math.floor(b.startMs / 1000))
-    if da ~= db then
-      return da < db
-    end
-    if a.allDay ~= b.allDay then
-      return a.allDay
-    end
-    return a.startMs < b.startMs
-  end)
-  local items = {}
-  for i = 1, math.min(#list, 30) do
-    local e = list[i]
-    table.insert(items, {
-      title = e.title or "",
-      startMs = e.startMs,
-      endMs = e.endMs,
-      allDay = e.allDay == true,
-      color = e.colorHex or "",
-      url = e.url or "",
-      location = e.location or "",
-    })
+  local function earlier(a, b)
+    if a.allDay ~= b.allDay then return a.allDay end
+    if a.startMs ~= b.startMs then return a.startMs < b.startMs end
+    return a.title < b.title
   end
-  noctalia.state.set("events", { synced = true, items = items })
+  table.sort(items, earlier)
+  table.sort(monthItems, earlier)
+  noctalia.state.set("events", { synced = true, items = items, month = month, monthItems = monthItems })
 end
+
+noctalia.state.watch("calendar_month_req", function(request)
+  local month = type(request) == "table" and request.month
+  if type(month) == "string" and string.match(month, "^%d%d%d%d%-%d%d%-01$") then
+    calendarMonth = month
+    refreshCalendar()
+  end
+end)
 
 ------------------------------------------------------------------ to-do (see lib/todo.luau)
 
@@ -596,6 +595,7 @@ local function setVisible(v)
   noctalia.state.set("anim_close", 0)
   if not v then
     screenLimit = 12
+    calendarMonth = nil
   end
   noctalia.state.set("visible", v)
   noctalia.log("dashboard: " .. (v and "show" or "hide"))
