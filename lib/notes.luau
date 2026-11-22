@@ -31,6 +31,7 @@ local saved = nil
 local noteError = nil
 local noteRequest = 0
 local editorRevision = 0
+local editSession
 local vaultRoot = nil
 local showEditor = true
 local saving = false
@@ -790,6 +791,63 @@ local function editorFeedback(text)
   })
 end
 
+local EDIT_PAGE_BYTES = 8 * 1024
+local EDIT_PAGE_LINES = 120
+
+local function noteEditSession(path, text)
+  if editSession and editSession.path == path and editSession.revision == editorRevision then
+    return editSession
+  end
+
+  local pages = {}
+  local start = 1
+  while start <= #text do
+    local last = math.min(start + EDIT_PAGE_BYTES - 1, #text)
+    local lineStart, lastNewline, lines = start, nil, 0
+    while lines < EDIT_PAGE_LINES do
+      local newline = string.find(text, "\n", lineStart, true)
+      if not newline or newline > last then break end
+      lastNewline = newline
+      lineStart = newline + 1
+      lines = lines + 1
+    end
+    if lines == EDIT_PAGE_LINES or (last < #text and lastNewline and lastNewline >= start + EDIT_PAGE_BYTES / 2) then
+      last = lastNewline
+    end
+    while last < #text do
+      local nextByte = string.byte(text, last + 1)
+      if nextByte < 128 or nextByte >= 192 then break end
+      last = last - 1
+    end
+    table.insert(pages, string.sub(text, start, last))
+    start = last + 1
+  end
+  if #pages == 0 then pages[1] = "" end
+  editSession = { path = path, revision = editorRevision, pages = pages, index = 1 }
+  return editSession
+end
+
+local function editPageControls(session, enabled)
+  local function pageButton(delta, glyph, tooltip)
+    local target = session.index + delta
+    return ui.button({
+      key = "vault-edit-page-" .. glyph, glyph = glyph, tooltip = tooltip, variant = "ghost", controlSize = "sm",
+      enabled = enabled and target >= 1 and target <= #session.pages,
+      onClick = function()
+        if editSession ~= session or selection ~= session.path or reading or confirmDelete or deleting then return end
+        if target < 1 or target > #session.pages then return end
+        session.index = target
+        update()
+      end,
+    })
+  end
+  return ui.row({ height = 32, gap = 6, align = "center" }, {
+    pageButton(-1, "chevron-left", "Previous part"),
+    ui.label({ text = string.format("Part %d of %d", session.index, #session.pages), fontSize = 11, color = "on_surface_variant" }),
+    pageButton(1, "chevron-right", "Next part"),
+  })
+end
+
 local function editor(width, height)
   if selection == nil then
     local input = stickyInput(math.max(1, height - 64))
@@ -886,17 +944,25 @@ local function editor(width, height)
     content = renderPreview(path, draft and draft.text or saved.text, width)
   elseif saved ~= nil or draft ~= nil then
     local base = draft and draft.revision or saved.revision
+    local session = noteEditSession(path, draft and draft.text or saved.text)
+    local index = session.index
+    if #session.pages > 1 then
+      table.insert(children, editPageControls(session, not confirming and not moving))
+      contentHeight = math.max(1, contentHeight - 38)
+    end
     content = ui.input({
-      key = "vault-editor-" .. path .. "-" .. editorRevision, value = draft and draft.text or saved.text,
+      key = "vault-editor-" .. path .. "-" .. editorRevision .. "-" .. index, value = session.pages[index],
       multiline = true, flexGrow = 1, focus = true, enabled = not confirming and not moving,
       fontSize = 13, placeholder = "Write Markdown…",
       onChange = function(value)
-        if selection ~= path or (deleting ~= nil and (deleting == path or insideFolder(path, deleting))) then return end
+        if selection ~= path or editSession ~= session or (deleting ~= nil and (deleting == path or insideFolder(path, deleting))) then return end
+        session.pages[index] = value
+        local text = table.concat(session.pages)
         local previous = drafts[path]
-        if saved ~= nil and value == saved.text and not saving then
+        if saved ~= nil and text == saved.text and not saving then
           drafts[path] = nil
         else
-          drafts[path] = { revision = previous and previous.revision or (saved and saved.revision) or base, text = value }
+          drafts[path] = { revision = previous and previous.revision or (saved and saved.revision) or base, text = text }
         end
         status = nil
         persistDrafts()
