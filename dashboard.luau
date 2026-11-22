@@ -2023,6 +2023,13 @@ local function nextTaskPreview()
   return task.text, PRIORITY_NAMES[task.pr] or "Custom priority"
 end
 
+-- Bound header text to the space between the banner's vertical padding edges.
+local function headerLabel(props)
+  props.baseline = "inkCentered"
+  props.maxLines = 1
+  return ui.label(props)
+end
+
 local function nextUpPreview(foreground, secondary, width)
   local title, detail
   if nextUpMode == "task" then
@@ -2033,9 +2040,9 @@ local function nextUpPreview(foreground, secondary, width)
   local showingTask = nextUpMode == "task"
   local mode = showingTask and "event" or "task"
   local tooltip = showingTask and "Show next event" or "Show priority task"
-  return ui.column({ key = "next-up", width = width, gap = 2, justify = "center", clip = true }, {
+  return ui.column({ key = "next-up", width = width, gap = 1, justify = "center", clip = true }, {
     ui.row({ gap = 5, align = "center" }, {
-      ui.label({ text = showingTask and "Priority task" or "Next event", fontSize = 11, color = secondary, maxLines = 1 }),
+      headerLabel({ text = showingTask and "Priority task" or "Next event", height = 14, fontSize = 11, color = secondary }),
       ui.row({
         key = "next-up-swap", width = 24, height = 23, align = "center", justify = "center",
         tooltip = tooltip, onClick = function() chooseNextUp(mode) end,
@@ -2043,8 +2050,8 @@ local function nextUpPreview(foreground, secondary, width)
         ui.glyph({ name = "arrows-exchange", size = 15, color = secondary }),
       }),
     }),
-    ui.label({ key = "next-up-title", text = title, fontSize = 13, fontWeight = "bold", color = foreground, maxLines = 1 }),
-    ui.label({ key = "next-up-detail", text = detail or "", fontSize = 11, color = secondary, maxLines = 1 }),
+    headerLabel({ key = "next-up-title", text = title, height = 17, fontSize = 13, fontWeight = "bold", color = foreground }),
+    headerLabel({ key = "next-up-detail", text = detail or "", height = 14, fontSize = 11, color = secondary }),
   })
 end
 
@@ -2056,13 +2063,13 @@ local function profileIdentity(size, foreground, secondary, border, width)
     gap = 10, align = "center", clip = true,
   }, {
     avatarNode(size, border),
-    ui.column({ gap = 2, flexGrow = 1, justify = "center", clip = true }, {
-      ui.label({ text = greeting() .. ",", fontSize = 11, color = secondary, maxLines = 1 }),
-      ui.label({
-        text = profile and profile.name or "", fontSize = size >= 50 and 23 or 20,
-        fontWeight = "bold", color = foreground, maxLines = 1,
+    ui.column({ gap = 1, flexGrow = 1, justify = "center", clip = true }, {
+      headerLabel({ text = greeting() .. ",", height = 13, fontSize = 11, color = secondary }),
+      headerLabel({
+        text = profile and profile.name or "", height = size >= 50 and 28 or 24,
+        fontSize = size >= 50 and 23 or 20, fontWeight = "bold", color = foreground,
       }),
-      ui.label({ key = "profile-stats", text = stats, fontSize = 11, color = secondary, maxLines = 1 }),
+      headerLabel({ key = "profile-stats", text = stats, height = 13, fontSize = 11, color = secondary }),
     }),
   })
 end
@@ -2094,9 +2101,9 @@ local function currentWeather(foreground, secondary, accent, detailed)
   local style = weatherStyles[weatherConditions[weather.code]]
   local glyph = style and (not weather.day and style[3] or style[1]) or "cloud"
   local readings = {
-    ui.label({
+    headerLabel({
       key = "weather-temperature", text = weather.temperature .. "°" .. weather.unit,
-      fontSize = detailed and 22 or 17, fontWeight = "bold", color = foreground, maxLines = 1,
+      height = detailed and 27 or 22, fontSize = detailed and 22 or 17, fontWeight = "bold", color = foreground,
     }),
   }
   if detailed then
@@ -2106,13 +2113,13 @@ local function currentWeather(foreground, secondary, accent, detailed)
       detail = detail and (detail .. " · " .. range) or range
     end
     if detail ~= nil then
-      table.insert(readings, ui.label({
-        key = "weather-conditions", text = detail, fontSize = 11, color = secondary, maxLines = 1,
+      table.insert(readings, headerLabel({
+        key = "weather-conditions", text = detail, height = 14, fontSize = 11, color = secondary,
       }))
     end
     if weather.city ~= nil then
-      table.insert(readings, ui.label({
-        key = "weather-city", text = weather.city, fontSize = 11, color = secondary, maxLines = 1,
+      table.insert(readings, headerLabel({
+        key = "weather-city", text = weather.city, height = 14, fontSize = 11, color = secondary,
       }))
     end
   end
@@ -2140,15 +2147,15 @@ local function header(width, height, monitor, stacked)
   local clockWidth = stacked and 92 or 123
   local showDate = width >= 390
   local clock = {
-    ui.label({
-      key = "header-time", text = os.date("%H:%M"), fontSize = stacked and 28 or 36, fontWeight = "bold",
-      color = foreground, textAlign = "right",
+    headerLabel({
+      key = "header-time", text = os.date("%H:%M"), height = stacked and 33 or 41,
+      fontSize = stacked and 28 or 36, fontWeight = "bold", color = foreground, textAlign = "right",
     }),
   }
   if showDate then
-    table.insert(clock, ui.label({
-      text = os.date(stacked and "%a, %b %d" or "%A, %B %d"), fontSize = stacked and 10 or 11,
-      color = secondary, textAlign = "right", maxLines = 1, maxWidth = clockWidth,
+    table.insert(clock, headerLabel({
+      key = "header-date", text = os.date(stacked and "%a, %b %d" or "%A, %B %d"),
+      height = 14, fontSize = stacked and 10 or 11, color = secondary, textAlign = "right", maxWidth = clockWidth,
     }))
   end
   local clockColumn = ui.column({ width = clockWidth, gap = 2, align = "end", justify = "center" }, clock)
