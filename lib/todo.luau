@@ -47,6 +47,7 @@ function M.load(path)
 
   -- one list: finished tasks stay where they are (checked), only delete removes them
   local all, open, finished = {}, 0, 0
+  local nextTask
   for i, t in ipairs(tasks) do
     local isDone = t.done == true
     if isDone then
@@ -54,13 +55,17 @@ function M.load(path)
     else
       open = open + 1
     end
-    table.insert(all, {
+    local item = {
       id = t.id ~= nil and tostring(t.id) or "",
       text = tostring(t.text or ""),
       pr = M.weight(t.priority),
       idx = i,
       done = isDone,
-    })
+    }
+    table.insert(all, item)
+    if not isDone and string.find(item.text, "%S") and (nextTask == nil or item.pr > nextTask.pr) then
+      nextTask = item
+    end
   end
   if data.sort ~= "manual" then
     table.sort(all, function(a, b)
@@ -75,7 +80,7 @@ function M.load(path)
   for i = 1, math.min(#all, 80) do
     table.insert(shown, all[i])
   end
-  return { ok = true, path = path, items = shown, open = open, done = finished }
+  return { ok = true, path = path, items = shown, open = open, done = finished, nextTask = nextTask }
 end
 
 function M.find(tasks, ref)

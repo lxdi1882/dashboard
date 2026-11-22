@@ -236,21 +236,6 @@ local function card(props, children)
   return ui.column(props, children)
 end
 
-local function chip(glyph, text, onClick)
-  return ui.row({
-    gap = 6,
-    align = "center",
-    paddingH = 12,
-    paddingV = 7,
-    radius = 16,
-    fill = "surface_container_high",
-    onClick = onClick,
-  }, {
-    ui.glyph({ name = glyph, size = 15, color = "primary" }),
-    ui.label({ text = text, fontSize = 13, color = "on_surface" }),
-  })
-end
-
 local function stat(value, caption)
   return ui.column({ gap = 2 }, {
     ui.label({ text = value, fontSize = 18, fontWeight = "bold", color = "on_surface" }),
@@ -1987,14 +1972,121 @@ local function avatarNode(size, border)
   })
 end
 
-local function profileBanner(width, height, monitor)
+local nextUpDir = noctalia.pluginDataDir()
+local nextUpPath = nextUpDir and (nextUpDir .. "/next-up-mode")
+local nextUpMode = nextUpPath and noctalia.readFile(nextUpPath) == "task" and "task" or "event"
+
+local function chooseNextUp(mode)
+  if nextUpMode == mode then return end
+  nextUpMode = mode
+  if nextUpPath then
+    local temp = nextUpPath .. ".tmp"
+    if not noctalia.writeFile(temp, mode) or not noctalia.renameFile(temp, nextUpPath) then
+      noctalia.notifyError("Dashboard", "Could not remember the Next up mode.")
+    end
+  end
+  update()
+end
+
+local function nextEventPreview()
+  if events == nil or not events.synced then return "Calendar unavailable" end
+  local now = noctalia.nowMs()
+  local today = os.date("%Y-%m-%d")
+  local upcoming, allDay
+  for _, event in ipairs(events.items) do
+    if event.endMs > now then
+      if event.startMs >= now and (upcoming == nil or event.startMs < upcoming.startMs) then
+        upcoming = event
+      elseif event.allDay and event.startMs < now
+          and os.date("%Y-%m-%d", math.floor(event.startMs / 1000)) == today then
+        allDay = allDay or event
+      end
+    end
+  end
+
+  local event = upcoming or allDay
+  if event == nil then return "Nothing upcoming" end
+  local start = math.floor(event.startMs / 1000)
+  local day = os.date("%Y-%m-%d", start)
+  local dateLabel = day == today and "Today" or os.date("%a, %b %d", start)
+  if day == os.date("%Y-%m-%d", os.time() + 86400) then dateLabel = "Tomorrow" end
+  local timeLabel = event.allDay and "All day" or os.date("%H:%M", start)
+  return event.title ~= "" and event.title or "Untitled event", dateLabel .. " · " .. timeLabel
+end
+
+local function nextTaskPreview()
+  if todo == nil or not todo.ok then return "To-do list unavailable" end
+  local task = todo.nextTask
+  if task == nil then return "No open tasks" end
+  return task.text, PRIORITY_NAMES[task.pr] or "Custom priority"
+end
+
+local function nextUpPreview(foreground, secondary, width)
+  local title, detail
+  if nextUpMode == "task" then
+    title, detail = nextTaskPreview()
+  else
+    title, detail = nextEventPreview()
+  end
+  local function tab(mode, text)
+    local active = nextUpMode == mode
+    return ui.row({
+      key = "next-up-" .. mode, height = 23, width = 45, radius = 7,
+      fill = active and "primary" or "surface/0",
+      align = "center", justify = "center",
+      onClick = function() chooseNextUp(mode) end,
+    }, {
+      ui.label({
+        text = text, fontSize = 11, fontWeight = active and "bold" or "normal",
+        color = active and "on_primary" or secondary,
+      }),
+    })
+  end
+  return ui.column({ key = "next-up", width = width, gap = 2, justify = "center", clip = true }, {
+    ui.row({ gap = 4, align = "center" }, {
+      ui.label({ text = "Next up", fontSize = 11, color = secondary, maxLines = 1, flexGrow = 1 }),
+      tab("event", "Event"),
+      tab("task", "Task"),
+    }),
+    ui.label({ key = "next-up-title", text = title, fontSize = 13, fontWeight = "bold", color = foreground, maxLines = 1 }),
+    ui.label({ key = "next-up-detail", text = detail or "", fontSize = 11, color = secondary, maxLines = 1 }),
+  })
+end
+
+local function profileBanner(width, height, monitor, stacked)
   local wallpaper = monitor and noctalia.wallpaperPath(monitor)
   local hasWallpaper = type(wallpaper) == "string" and wallpaper ~= ""
   local radius = 17
   local foreground = hasWallpaper and "#ffffff" or "on_surface"
   local secondary = hasWallpaper and "#e3e7ef" or "on_surface_variant"
   local border = hasWallpaper and "#ffffff66" or "outline_variant"
-  local avatarSize = height - 20
+  local stats = "Up " .. fmtUptime(uptimeSec)
+  if screen ~= nil and screen.ok then stats = stats .. " · " .. fmtDur(screen.sec) .. " screen time" end
+  local identity = ui.row({ gap = 10, align = "center", flexGrow = stacked and 0 or 1 }, {
+    avatarNode(stacked and 44 or (height - 20), border),
+    ui.column({ gap = 2, flexGrow = 1, justify = "center", clip = true }, {
+      ui.label({ text = greeting() .. ",", fontSize = 11, color = secondary, maxLines = 1 }),
+      ui.label({
+        text = profile and profile.name or "", fontSize = stacked and 20 or 23,
+        fontWeight = "bold", color = foreground, maxLines = 1,
+      }),
+      ui.label({ key = "profile-stats", text = stats, fontSize = 11, color = secondary, maxLines = 1 }),
+    }),
+  })
+  local preview = nextUpPreview(foreground, secondary, stacked and math.max(1, width - 24) or math.floor(width * 0.45))
+  local content
+  if stacked then
+    content = ui.column({
+      key = "profile-content", height = height, translateY = hasWallpaper and -height or 0,
+      paddingH = 12, gap = 5, justify = "center",
+    }, { identity, ui.box({ height = 1, fill = border }), preview })
+  else
+    content = ui.row({
+      key = "profile-content", height = height, translateY = hasWallpaper and -height or 0,
+      paddingH = 12, gap = 12, align = "center",
+    }, { identity, ui.box({ width = 1, height = 42, fill = border }), preview })
+  end
+
   local layers = {}
   if hasWallpaper then
     table.insert(layers, ui.image({
@@ -2002,36 +2094,19 @@ local function profileBanner(width, height, monitor)
       fit = "cover", radius = radius, opacity = 0.38,
     }))
   end
-  table.insert(layers, ui.row({
-    key = "profile-content", height = height, translateY = hasWallpaper and -height or 0,
-    gap = 12, paddingH = 12, align = "center",
-  }, {
-    avatarNode(avatarSize, border),
-    ui.column({ gap = 2, flexGrow = 1, justify = "center", clip = true }, {
-      ui.label({ text = greeting() .. ",", fontSize = 11, color = secondary, maxLines = 1 }),
-      ui.label({
-        text = profile and profile.name or "", fontSize = height >= 78 and 23 or 20,
-        fontWeight = "bold", color = foreground, maxLines = 1,
-      }),
-      ui.label({ text = "Up " .. fmtUptime(uptimeSec), fontSize = 11, color = secondary, maxLines = 1 }),
-    }),
-  }))
+  table.insert(layers, content)
   return ui.column({
     key = "profile-banner", width = width, height = height, radius = radius, clip = true,
     fill = hasWallpaper and "#10141b" or "surface_container",
   }, layers)
 end
 
-local function header(width, height, monitor)
-  local compact = width < 630
+local function header(width, height, monitor, stacked)
   local showDate = width >= 440
   local reserve = showDate and 176 or 120
-  local bannerWidth = compact and math.max(1, width - reserve)
-    or math.min(540, math.floor(width * 0.49))
-  local kids = { profileBanner(bannerWidth, height, monitor) }
-  if not compact and screen ~= nil and screen.ok then
-    table.insert(kids, chip("device-desktop", fmtDur(screen.sec) .. " screen time", nil))
-  end
+  local bannerWidth = math.max(1, math.min(680, width - reserve))
+  local compact = width < 630
+  local kids = { profileBanner(bannerWidth, height, monitor, stacked) }
   table.insert(kids, ui.spacer({ flexGrow = 1 }))
   local clock = {
     ui.label({
@@ -2340,7 +2415,8 @@ function update()
     pad, colGap = 14, 10
   end
   local width = cardW - pad * 2
-  local headerHeight = short and 68 or 78
+  local stackProfile = width < 690
+  local headerHeight = stackProfile and 124 or (short and 68 or 78)
   local height = math.max(0, cardH - 2 * pad - 3 * colGap - headerHeight - 36)
   local monitor = layer.outputName() or (g and g.name) or "default"
 
@@ -2369,7 +2445,7 @@ function update()
   end
 
   local kids = {
-    ui.column({ height = headerHeight }, { header(width, headerHeight, g and g.name or layer.outputName()) }),
+    ui.column({ height = headerHeight }, { header(width, headerHeight, g and g.name or layer.outputName(), stackProfile) }),
     ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
     body,
     ui.column({ height = 32 }, { footer() }),
