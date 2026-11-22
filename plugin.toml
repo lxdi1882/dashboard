@@ -89,7 +89,7 @@ layer     = "overlay"
 [[layer]]
 id             = "screen"
 entry          = "dashboard.luau"
-layer          = "overlay"
+layer          = "top"
 anchors        = ["top", "bottom", "left", "right"]
 exclusive_zone = -1
 keyboard       = "on_demand"
