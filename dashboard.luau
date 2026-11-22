@@ -76,6 +76,10 @@ local function easeOut(elapsed, duration)
   return 1 - (1 - t) ^ 3
 end
 
+local function notesMotionProgress(elapsed)
+  return easeOut(elapsed, 155 * motionScale)
+end
+
 local viewMotion
 local function animateView(distance, fade)
   if motionScale > 0 then
@@ -200,6 +204,7 @@ noctalia.state.watch("gh_repos", function(v) ghRepos = v end)
 local function maximize(id)
   if maximizedCard == id then return end
   animateView(id == nil and -8 or 10, 0.34)
+  if id == "notes" then Notes.resetMotion() end
   if id == "system" or maximizedCard == "system" then systemSession = systemSession + 1 end
   maximizedCard = id
   screenHover = nil
@@ -2939,7 +2944,7 @@ function update()
   local height = math.max(0, cardH - 2 * pad - 3 * colGap - headerHeight - 36)
   local monitor = lastOutputName or (g and g.name) or "default"
 
-  local body, screenBody
+  local body, screenBody, notesFrame
   if maximizedCard == "screen" then
     local sidebarWidth = width >= 900 and height >= 460 and math.floor((width - 34) * 0.35) or nil
     HERO_FS = short and 26 or 32
@@ -2958,7 +2963,9 @@ function update()
   elseif maximizedCard == "system" then
     body = systemDetails(width, height)
   elseif maximizedCard == "notes" then
-    body = Notes.details(width, height, sectionTitle("note", "Notes", nil, Notes.tools(), "notes"))
+    body, notesFrame = Notes.details(width, height,
+      sectionTitle("note", "Notes", nil, Notes.tools(), "notes"), notesMotionProgress)
+    if notesFrame then layer.setNeedsFrameTick(true) end
   elseif maximizedCard == "github" then
     body = githubDetails(width, height)
   else
@@ -2972,7 +2979,8 @@ function update()
     ui.column({ height = 32 }, { footer() }),
   }
   layoutCache = {
-    w = cardW, h = cardH, pad = pad, gap = colGap, bodyHeight = height, kids = kids, screenBody = screenBody,
+    w = cardW, h = cardH, pad = pad, gap = colGap, bodyHeight = height, kids = kids,
+    screenBody = screenBody, notesFrame = notesFrame,
   }
   renderLayout(animProgress())
 end
@@ -2993,8 +3001,13 @@ function onFrameTick(_deltaMs)
   if layoutCache.screenBody and before ~= highlight.fraction then
     layoutCache.kids[3] = layoutCache.screenBody()
   end
+  if layoutCache.notesFrame then
+    local body, moving = layoutCache.notesFrame()
+    layoutCache.kids[3] = body
+    if not moving then layoutCache.notesFrame = nil end
+  end
   renderLayout(anim)
-  if closeToken == 0 and anim >= 1 and not revealing and viewMotion == nil then
+  if closeToken == 0 and anim >= 1 and not revealing and viewMotion == nil and layoutCache.notesFrame == nil then
     layer.setNeedsFrameTick(false)
   end
 end
