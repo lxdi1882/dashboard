@@ -2546,8 +2546,8 @@ local function header(width, height, monitor, stacked)
   local hasWallpaper = type(wallpaper) == "string" and wallpaper ~= ""
   local radius = 17
   local paddingH = stacked and 12 or (width >= 960 and 20 or 16)
-  local paddingV = height >= 96 and 14 or 12
-  if stacked then paddingV = height >= 144 and 12 or 8 end
+  local paddingV = height >= 124 and 14 or 12
+  if stacked then paddingV = height >= 164 and 12 or 8 end
   local foreground = hasWallpaper and "#ffffff" or "on_surface"
   local secondary = hasWallpaper and "#d4d9e3" or "on_surface_variant"
   local accent = hasWallpaper and "#e7ebf2" or "primary"
@@ -2578,7 +2578,7 @@ local function header(width, height, monitor, stacked)
 
   local available = width - 2 * paddingH
   local identityWidth = not stacked and math.floor(available * 0.32) or nil
-  local avatarSize = stacked and 44 or math.min(58, height - 2 * paddingV)
+  local avatarSize = stacked and (width < 390 and 64 or 72) or math.min(96, height - 2 * paddingV)
   local identity = profileIdentity(avatarSize, foreground, secondary, border, identityWidth)
   local weatherWidth = showWeather and ((detailed and 190 or 88) + gap) or 0
   local previewWidth = stacked and available or (available - identityWidth - clockWidth - 32 - weatherWidth - 1 - 4 * gap)
@@ -2610,7 +2610,7 @@ local function header(width, height, monitor, stacked)
       key = "profile-content", height = height, translateY = lift,
       paddingH = paddingH, paddingV = paddingV, gap = 5, justify = "center",
     }, {
-      ui.row({ height = 52, gap = gap, align = "center" }, row),
+      ui.row({ height = avatarSize, gap = gap, align = "center" }, row),
       ui.box({ height = 1, fill = border }),
       preview,
     }))
@@ -2934,8 +2934,8 @@ function update()
   end
   local width = cardW - pad * 2
   local stackProfile = width < 690
-  local headerHeight = short and 84 or 96
-  if stackProfile then headerHeight = cardH < 500 and 136 or 144 end
+  local headerHeight = short and 108 or 124
+  if stackProfile then headerHeight = cardH < 500 and 156 or 164 end
   local height = math.max(0, cardH - 2 * pad - 3 * colGap - headerHeight - 36)
   local monitor = lastOutputName or (g and g.name) or "default"
 
