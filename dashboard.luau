@@ -2250,97 +2250,119 @@ local function cyclePriority(ref)
 end
 
 local PRIORITY_NAMES = { [0] = "No priority", "Low", "Medium", "High" }
+local todoFilter = "open"
 
-local function todoRow(t, textW)
-  local pc = "on_surface_variant"
-  if not t.done then
-    if t.pr >= 3 then
-      pc = "error"
-    elseif t.pr == 2 then
-      pc = "tertiary"
-    elseif t.pr == 1 then
-      pc = "secondary"
-    end
-  end
-  return ui.row({
-    key = "t" .. t.idx,
-    gap = 4,
-    align = "center",
-    paddingH = 6,
-    paddingV = 3,
-    radius = 12,
-    fill = t.done and "surface_container_high/0.5" or "surface_container_high",
-  }, {
+local function todoPriority(task)
+  if task.done then return "on_surface_variant" end
+  if task.pr >= 3 then return "error" end
+  if task.pr == 2 then return "tertiary" end
+  if task.pr == 1 then return "secondary" end
+  return "on_surface_variant"
+end
+
+local function todoRow(task, expanded, wide)
+  local priority = PRIORITY_NAMES[task.pr] or "Custom priority"
+  local tone = todoPriority(task)
+  local children = {
     ui.button({
-      glyph = t.done and "circle-check-filled" or "circle",
-      glyphSize = 18,
-      variant = t.done and "primary" or "ghost",
-      controlSize = "sm",
-      tooltip = t.done and "Mark as not done" or "Mark as done",
-      onClick = function() toggleTask(t) end,
+      key = "task-check-" .. task.idx, glyph = task.done and "circle-check-filled" or "circle",
+      glyphSize = 18, variant = "ghost", controlSize = "sm", width = 32,
+      tooltip = task.done and "Mark as open" or "Complete task",
+      onClick = function() toggleTask(task) end,
     }),
     ui.label({
-      text = t.text,
-      fontSize = 14,
-      color = t.done and "on_surface_variant" or "on_surface",
-      opacity = t.done and 0.65 or 1,
-      maxLines = 2,
-      maxWidth = textW,
-      flexGrow = 1,
+      text = task.text, fontSize = 13, fontWeight = task.done and "normal" or "medium",
+      color = task.done and "on_surface_variant" or "on_surface", maxLines = expanded and 2 or 1, flexGrow = 1,
     }),
-    ui.row({
-      paddingH = 6,
-      paddingV = 6,
-      radius = 8,
-      tooltip = "Priority: " .. (PRIORITY_NAMES[t.pr] or "Custom") .. " (click to change)",
-      onClick = function() cyclePriority(t) end,
+  }
+  if expanded then
+    table.insert(children, ui.row({
+      height = 32, gap = 4, paddingH = 6, align = "center", radius = 8,
+      fill = "surface_container_high", tooltip = priority .. " · Click to change priority",
+      onClick = function() cyclePriority(task) end,
     }, {
-      ui.glyph({ name = "flag", size = 16, color = pc }),
+      ui.glyph({ name = "flag", size = 15, color = tone }),
+      wide and ui.label({ text = priority, fontSize = 11, color = "on_surface_variant" }) or nil,
+    }))
+    table.insert(children, ui.button({
+      key = "task-remove-" .. task.idx, glyph = "trash", variant = "ghost", controlSize = "sm",
+      width = 32, tooltip = "Remove task", onClick = function() deleteTask(task) end,
+    }))
+  elseif task.pr >= 3 then
+    table.insert(children, ui.glyph({ name = "flag", size = 14, color = tone }))
+  end
+  return ui.row({
+    key = "task-" .. task.idx, height = expanded and 40 or 34, gap = 4, paddingH = 4,
+    align = "center", radius = 8, fill = "surface_container_high/0.65",
+  }, children)
+end
+
+local function quickTaskInput()
+  return ui.row({ height = 32, gap = 4, align = "center" }, {
+    ui.input({
+      key = "todo-in-" .. inputGen, value = pendingText, placeholder = "Add a task…", height = 32, flexGrow = 1,
+      onChange = function(value) pendingText = value end, onSubmit = addTask,
     }),
     ui.button({
-      glyph = "trash",
-      glyphSize = 16,
-      variant = "ghost",
-      controlSize = "sm",
-      tooltip = "Remove",
-      onClick = function() deleteTask(t) end,
+      key = "todo-add", glyph = "plus", height = 32, width = 32, variant = "primary",
+      tooltip = "Add task", onClick = function() addTask(pendingText) end,
     }),
   })
 end
 
-local function todoCard(textWidth)
+local function todoCard(width, height, expanded)
+  local loaded = todo ~= nil and todo.ok
+  local count = loaded and (todo.open .. " open") or nil
+  local children = { sectionTitle("list-check", "To do", not expanded and count or nil, nil, "todo") }
+  if expanded or height >= 149 then table.insert(children, quickTaskInput()) end
+
   local rows = {}
-  local right = nil
-  if todo == nil then
-    table.insert(rows, ui.label({ text = "Loading…", fontSize = 13, color = "on_surface_variant" }))
-  elseif todo.ok ~= true then
-    table.insert(rows, ui.label({
-      text = "No to-do file yet. Add your first task and it will be created at " .. tostring(todo.path) .. ".",
-      fontSize = 12,
-      color = "on_surface_variant",
-      maxLines = 4,
-      maxWidth = textWidth,
-    }))
-  else
-    right = todo.open .. " open · " .. todo.done .. " done"
-    if #todo.items == 0 then
-      table.insert(rows, ui.label({ text = "All clear. Nothing on your list.", fontSize = 13, color = "on_surface_variant" }))
-    end
-    for _, t in ipairs(todo.items) do
-      table.insert(rows, todoRow(t, textWidth))
+  if loaded then
+    local wide = width >= 490
+    if expanded then
+      local function tab(id, text)
+        local active = todoFilter == id
+        return ui.button({
+          key = "todo-tab-" .. id, text = text, controlSize = "sm",
+          variant = active and "primary" or "ghost", glyph = active and "check" or "",
+          onClick = function()
+            todoFilter = id
+            update()
+          end,
+        })
+      end
+      table.insert(children, ui.row({ height = 32, gap = 6 }, {
+        tab("open", "Open (" .. todo.open .. ")"),
+        tab("done", "Completed (" .. todo.done .. ")"),
+      }))
+      for _, task in ipairs(todo.items) do
+        if task.done == (todoFilter == "done") then table.insert(rows, todoRow(task, true, wide)) end
+      end
+    else
+      local open = {}
+      for _, task in ipairs(todo.items) do
+        if not task.done and (todo.nextTask == nil or task.idx ~= todo.nextTask.idx) then table.insert(open, task) end
+      end
+      table.sort(open, function(a, b)
+        if a.pr ~= b.pr then return a.pr > b.pr end
+        return a.idx < b.idx
+      end)
+      if todo.nextTask ~= nil then table.insert(open, 1, todo.nextTask) end
+      for _, task in ipairs(open) do table.insert(rows, todoRow(task, false, false)) end
     end
   end
-  return card({ flexGrow = 1 }, {
-    sectionTitle("list-check", "To do", right, nil, "todo"),
-    ui.input({
-      key = "todo-in-" .. inputGen,
-      placeholder = "Add a task and press Enter…",
-      focus = true,
-      onChange = function(value) pendingText = value end,
-      onSubmit = function(value) addTask(value) end,
-    }),
-    ui.scroll({ gap = 6, flexGrow = 1 }, rows),
-  })
+  local empty = todo == nil and "Loading…"
+    or not loaded and "Add your first task"
+    or expanded and todoFilter == "done" and "No completed tasks"
+    or "All caught up"
+  if #rows == 0 then
+    table.insert(children, ui.label({ text = empty, height = 21, fontSize = 12, color = "on_surface_variant", maxLines = 1 }))
+  elseif expanded or height >= 174 then
+    table.insert(children, ui.scroll({ key = "todo-list-" .. (expanded and todoFilter or "grid"), gap = 5, flexGrow = 1 }, rows))
+  else
+    table.insert(children, rows[1])
+  end
+  return card({ flexGrow = 1, padding = 10, gap = expanded and 8 or 5, clip = true }, children)
 end
 
 ------------------------------------------------------------------ header
@@ -2741,11 +2763,15 @@ local function cachedScreenCard(innerW, sidebarWidth, chartOnly)
   return c.node
 end
 
-local function cachedTodoCard(textWidth)
+local function cachedTodoCard(width, height)
   local expanded = maximizedCard == "todo"
-  if todoCache == nil or todoCache.todo ~= todo or todoCache.width ~= textWidth
-      or todoCache.inputGen ~= inputGen or todoCache.expanded ~= expanded then
-    todoCache = { todo = todo, width = textWidth, inputGen = inputGen, expanded = expanded, node = todoCard(textWidth) }
+  local filter = expanded and todoFilter or nil
+  if todoCache == nil or todoCache.todo ~= todo or todoCache.width ~= width or todoCache.height ~= height
+      or todoCache.inputGen ~= inputGen or todoCache.expanded ~= expanded or todoCache.filter ~= filter then
+    todoCache = {
+      todo = todo, width = width, height = height, inputGen = inputGen, expanded = expanded, filter = filter,
+      node = todoCard(width, height, expanded),
+    }
   end
   return todoCache.node
 end
@@ -2783,11 +2809,7 @@ local function gridCard(id, w, h)
     HERO_FS = h >= 340 and 28 or 20
     return cachedScreenCard(w - 32, nil, not hasListSpace)
   elseif id == "todo" then
-    if h < 160 then
-      local detail = todo and todo.ok and (todo.open .. " open · " .. todo.done .. " done") or "To-do list"
-      return summaryCard(id, detail)
-    end
-    return cachedTodoCard(math.max(48, w - 146))
+    return cachedTodoCard(w, h)
   elseif id == "calendar" then
     return cachedAgendaCard(w, h)
   elseif id == "notes" then
@@ -2924,7 +2946,7 @@ function update()
   elseif maximizedCard == "calendar" then
     body = cachedAgendaCard(width, height)
   elseif maximizedCard == "todo" then
-    body = cachedTodoCard(math.max(48, width - 146))
+    body = cachedTodoCard(width, height)
   elseif maximizedCard == "system" then
     body = systemDetails(width, height)
   elseif maximizedCard == "notes" then
