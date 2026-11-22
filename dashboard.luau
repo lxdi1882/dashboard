@@ -2028,25 +2028,18 @@ local function nextUpPreview(foreground, secondary, width)
   else
     title, detail = nextEventPreview()
   end
-  local function tab(mode, text)
-    local active = nextUpMode == mode
-    return ui.row({
-      key = "next-up-" .. mode, height = 23, width = 45, radius = 7,
-      fill = active and "primary" or "surface/0",
-      align = "center", justify = "center",
-      onClick = function() chooseNextUp(mode) end,
-    }, {
-      ui.label({
-        text = text, fontSize = 11, fontWeight = active and "bold" or "normal",
-        color = active and "on_primary" or secondary,
-      }),
-    })
-  end
+  local showingTask = nextUpMode == "task"
+  local mode = showingTask and "event" or "task"
+  local tooltip = showingTask and "Show next event" or "Show priority task"
   return ui.column({ key = "next-up", width = width, gap = 2, justify = "center", clip = true }, {
-    ui.row({ gap = 4, align = "center" }, {
-      ui.label({ text = "Next up", fontSize = 11, color = secondary, maxLines = 1, flexGrow = 1 }),
-      tab("event", "Event"),
-      tab("task", "Task"),
+    ui.row({ gap = 5, align = "center" }, {
+      ui.label({ text = showingTask and "Priority task" or "Next event", fontSize = 11, color = secondary, maxLines = 1 }),
+      ui.row({
+        key = "next-up-swap", width = 24, height = 23, align = "center", justify = "center",
+        tooltip = tooltip, onClick = function() chooseNextUp(mode) end,
+      }, {
+        ui.glyph({ name = "arrows-exchange", size = 15, color = secondary }),
+      }),
     }),
     ui.label({ key = "next-up-title", text = title, fontSize = 13, fontWeight = "bold", color = foreground, maxLines = 1 }),
     ui.label({ key = "next-up-detail", text = detail or "", fontSize = 11, color = secondary, maxLines = 1 }),
