@@ -613,7 +613,7 @@ local function loadPreview(path, text)
   return state
 end
 
-local function renderPreview(path, text, width, height)
+local function renderPreview(path, text, width)
   local view = loadPreview(path, text)
   local rows = {}
   if view.data == nil then
@@ -635,7 +635,7 @@ local function renderPreview(path, text, width, height)
     end
     if #rows == 0 then table.insert(rows, message("This note is empty. Choose Edit to start writing.")) end
   end
-  return ui.scroll({ key = "vault-preview-" .. path, width = width, height = height, gap = 8 }, rows)
+  return ui.scroll({ key = "vault-preview-" .. path, flexGrow = 1, gap = 8 }, rows)
 end
 
 local function datedTitle(title, modified, width)
@@ -727,13 +727,14 @@ local function editor(width, height)
     datedTitle(title, saved and saved.modified, width),
     ui.row({ gap = 4, height = 32, align = "center" }, controls),
   }
+  local content
   if (saved ~= nil or draft ~= nil) and reading then
-    table.insert(children, renderPreview(path, draft and draft.text or saved.text, width, contentHeight))
+    content = renderPreview(path, draft and draft.text or saved.text, width)
   elseif saved ~= nil or draft ~= nil then
     local base = draft and draft.revision or saved.revision
-    table.insert(children, ui.input({
+    content = ui.input({
       key = "vault-editor-" .. path .. "-" .. editorRevision, value = draft and draft.text or saved.text,
-      multiline = true, width = width, height = contentHeight, fontSize = 13, placeholder = "Write Markdown…",
+      multiline = true, flexGrow = 1, focus = true, fontSize = 13, placeholder = "Write Markdown…",
       onChange = function(value)
         if selection ~= path then return end
         local previous = drafts[path]
@@ -746,10 +747,12 @@ local function editor(width, height)
         persistDrafts()
       end,
       onSubmit = function() saveNote(path) end,
-    }))
-  else
-    table.insert(children, ui.box({ width = 1, height = contentHeight, fill = "surface/0" }))
+    })
   end
+  -- Fill a bounded viewport so the native reader and editor receive an exact height.
+  table.insert(children, ui.column({
+    key = "vault-document-viewport", width = width, height = contentHeight, clip = true,
+  }, content and { content } or {}))
   local feedback = draftError or status or noteError
     or (conflict and "This file changed on disk. Your draft is still here.")
     or (saved == nil and "Opening note…")
