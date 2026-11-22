@@ -184,6 +184,7 @@ end
 ------------------------------------------------------------------ small UI pieces
 
 local maximizedCard = nil
+local systemSession = 0
 local calendarSelection = nil
 local calendarPane = "month"
 
@@ -198,6 +199,7 @@ noctalia.state.watch("gh_repos", function(v) ghRepos = v end)
 local function maximize(id)
   if maximizedCard == id then return end
   animateView(id == nil and -8 or 10, 0.34)
+  if id == "system" or maximizedCard == "system" then systemSession = systemSession + 1 end
   maximizedCard = id
   screenHover = nil
   if id == "github" then
@@ -1799,143 +1801,271 @@ end
 ------------------------------------------------------------------ CPU governor (needs /usr/local/bin/set-governor + sudoers rule)
 
 local GOV_DIR = "/sys/devices/system/cpu/cpu0/cpufreq/"
-local govList = nil
-local govCurrent = nil
+local govList
+local govCurrent
+local govBusy = false
 local nextGovernorRead = 0
-local GOV_TIPS = {
-  performance = "Max clock speed, most power use",
-  powersave = "Lowest clock speed, saves power",
-  schedutil = "Scales with load (scheduler driven)",
-  ondemand = "Jumps up fast under load",
-  conservative = "Scales up and down gradually",
-  userspace = "Speed set by a program",
-}
-
-local function readGovernors()
-  local raw = noctalia.readFile(GOV_DIR .. "scaling_available_governors")
-  local list = {}
-  if raw ~= nil then
-    for g in string.gmatch(raw, "%S+") do
-      table.insert(list, g)
-    end
-  end
-  return list
-end
 
 local function readGovernor()
   local raw = noctalia.readFile(GOV_DIR .. "scaling_governor")
-  if raw == nil then
-    return nil
-  end
-  return noctalia.string.trim(raw)
+  return raw and noctalia.string.trim(raw) or nil
 end
 
-local function setGovernor(g)
-  govCurrent = g
-  noctalia.runAsync({ "sudo", "-n", "/usr/local/bin/set-governor", g }, function(result)
-    govCurrent = readGovernor()
+local function setGovernor(mode)
+  if govBusy then return end
+  govBusy = true
+  local started = noctalia.runAsync({ "sudo", "-n", "/usr/local/bin/set-governor", mode }, function(result)
+    govBusy = false
+    govCurrent = readGovernor() or govCurrent
     nextGovernorRead = noctalia.nowMs() + 5000
     if result.exitCode ~= 0 then
       noctalia.notifyError("Dashboard", "Could not set governor: " .. tostring(result.stderr))
+    elseif govCurrent ~= mode then
+      noctalia.notifyError("Dashboard", "The CPU governor could not be confirmed.")
     end
     update()
   end)
+  if not started then
+    govBusy = false
+    noctalia.notifyError("Dashboard", "Could not start the CPU governor helper.")
+  end
   update()
 end
 
-local function governorRow()
+local function governorButton(compact)
   if govList == nil then
-    govList = readGovernors()
+    govList = {}
+    local available = noctalia.readFile(GOV_DIR .. "scaling_available_governors") or ""
+    for mode in string.gmatch(available, "%S+") do table.insert(govList, mode) end
   end
-  if #govList == 0 then
-    return nil
-  end
+  if #govList == 0 then return nil end
   local now = noctalia.nowMs()
-  if now >= nextGovernorRead then
+  if not govBusy and now >= nextGovernorRead then
     govCurrent = readGovernor() or govCurrent
     nextGovernorRead = now + 5000
   end
-  local lines = {}
-  for first = 1, #govList, 3 do
-    local pills = {}
-    for i = first, math.min(first + 2, #govList) do
-      local g = govList[i]
-      local active = (g == govCurrent)
-      table.insert(pills, ui.row({
-        key = "gov-" .. g,
-        flexGrow = 1,
-        justify = "center",
-        paddingV = 6,
-        radius = 9,
-        fill = active and "primary" or "surface_container_high",
-        tooltip = GOV_TIPS[g] or g,
-        onClick = function()
-          if not active then
-            setGovernor(g)
-          end
-        end,
-      }, {
-        ui.label({
-          text = string.upper(string.sub(g, 1, 1)) .. string.sub(g, 2),
-          fontSize = 12,
-          fontWeight = active and "bold" or "normal",
-          color = active and "on_primary" or "on_surface",
-          maxLines = 1,
-        }),
-      }))
+  local nextMode = govList[1]
+  for i, mode in ipairs(govList) do
+    if mode == govCurrent then
+      nextMode = govList[i % #govList + 1]
+      break
     end
-    table.insert(lines, ui.row({ gap = 6 }, pills))
   end
-  return ui.column({ gap = 6 }, {
-    ui.label({ text = "CPU governor", fontSize = 11, fontWeight = "bold", color = "on_surface_variant" }),
-    ui.column({ gap = 6 }, lines),
+  local label = govBusy and "Switching…" or (govCurrent or "Unknown")
+  return ui.button({
+    key = "governor-cycle", glyph = "arrows-exchange", text = (compact and "" or "Governor · ") .. label,
+    controlSize = "sm", variant = "ghost", enabled = not govBusy and #govList > 1,
+    tooltip = #govList > 1 and ("CPU governor · next: " .. nextMode) or "Only one CPU governor is available",
+    onClick = function()
+      if #govList > 1 then setGovernor(nextMode) end
+    end,
   })
 end
 
 local disk
 local nextDiskRead = 0
 
+local function systemDisk()
+  local now = noctalia.nowMs()
+  if now >= nextDiskRead then
+    disk = noctalia.diskStats("/")
+    nextDiskRead = now + 10000
+  end
+  return disk
+end
+
+local function monitorMessage()
+  return ui.label({
+    text = "System monitor is off. Enable [system.monitor] in your Noctalia config.",
+    fontSize = 13, color = "on_surface_variant", maxLines = 3,
+  })
+end
+
 local function systemCard(showGovernor)
   local stats = noctalia.systemStats()
-  local rows = {}
+  local rows = { sectionTitle("cpu", "System", nil, nil, "system") }
   if stats == nil then
-    table.insert(rows, ui.label({
-      text = "System monitor is off. Enable [system.monitor] in your Noctalia config.",
-      fontSize = 13,
-      color = "on_surface_variant",
-      maxLines = 3,
-    }))
+    table.insert(rows, monitorMessage())
   else
     table.insert(rows, meter("CPU", stats.cpu.usagePercent))
     table.insert(rows, meter("RAM", stats.ram.usagePercent))
-    local now = noctalia.nowMs()
-    if now >= nextDiskRead then
-      disk = noctalia.diskStats("/")
-      nextDiskRead = now + 10000
+    local storage = systemDisk()
+    if storage ~= nil then table.insert(rows, meter("Disk", storage.usagePercent)) end
+  end
+  if showGovernor then
+    local governor = governorButton(false)
+    if governor ~= nil then table.insert(rows, governor) end
+  end
+  return card({ flexGrow = 1, padding = 10, gap = 7 }, rows)
+end
+
+local systemView
+local processSort = "cpu"
+
+local function updateSystemSamples(stats)
+  if systemView == nil or systemView.session ~= systemSession then
+    systemView = { session = systemSession, cpu = {}, ram = {}, sampleAt = 0, processesAt = 0 }
+  end
+  local view = systemView
+  local now = noctalia.nowMs()
+  if now >= view.sampleAt then
+    view.sampleAt = now + 2000
+    if #view.cpu >= 45 then
+      table.remove(view.cpu, 1)
+      table.remove(view.ram, 1)
     end
-    if disk ~= nil then
-      table.insert(rows, meter("Disk", disk.usagePercent))
-    end
-    local extra = {}
-    if stats.cpu.tempC ~= nil then
-      table.insert(extra, string.format("CPU %d°C", math.floor(stats.cpu.tempC + 0.5)))
-    end
-    if stats.loadAvg ~= nil and stats.loadAvg[1] ~= nil then
-      table.insert(extra, string.format("load %.2f", stats.loadAvg[1]))
-    end
-    if #extra > 0 then
-      table.insert(rows, ui.label({ text = table.concat(extra, "  ·  "), fontSize = 11, color = "on_surface_variant" }))
+    table.insert(view.cpu, math.clamp(stats.cpu.usagePercent / 100, 0, 1))
+    table.insert(view.ram, math.clamp(stats.ram.usagePercent / 100, 0, 1))
+  end
+
+  if not view.busy and now >= view.processesAt then
+    local dir = noctalia.pluginDir()
+    view.processesAt = now + 4000
+    if dir == nil or not noctalia.commandExists("python3") then
+      view.error = "Process usage needs Python 3."
+    else
+      view.busy = true
+      local started = noctalia.runAsync({ "python3", dir .. "/processusage.py" }, function(result)
+        if maximizedCard ~= "system" or systemSession ~= view.session then return end
+        view.busy = false
+        local data = result.exitCode == 0 and noctalia.json.decode(result.stdout) or nil
+        if type(data) == "table" and type(data.cpu) == "table" and type(data.ram) == "table" then
+          view.processes = data
+          view.error = nil
+        else
+          view.processes = nil
+          view.error = "Process usage is temporarily unavailable."
+        end
+        update()
+      end)
+      if not started then
+        view.busy = false
+        view.processes = nil
+        view.error = "Process usage is temporarily unavailable."
+      end
     end
   end
-  local gov = showGovernor ~= false and governorRow() or nil
-  if gov ~= nil then
-    table.insert(rows, gov)
+  return view
+end
+
+local function formatMemory(bytes)
+  if bytes >= 1024 ^ 3 then return string.format("%.1f GiB", bytes / 1024 ^ 3) end
+  return string.format("%.0f MiB", bytes / 1024 ^ 2)
+end
+
+local function resourceGraph(name, color, values, detail, width, graphHeight)
+  local latest = values[#values] or 0
+  local points = #values > 1 and values or { latest, latest }
+  local kids = {
+    ui.row({ height = 27, gap = 8, align = "center" }, {
+      ui.label({ text = name, fontSize = 13, fontWeight = "bold", color = "on_surface", flexGrow = 1 }),
+      ui.label({
+        text = string.format("%.0f%%", latest * 100), fontSize = 19, fontWeight = "bold", color = "on_surface",
+      }),
+    }),
+    ui.graph({
+      key = "system-graph-" .. name, width = math.max(1, width - 22), height = graphHeight, values = points,
+      color = color, lineWidth = 2, fillOpacity = 0.14,
+    }),
+  }
+  if detail ~= nil then
+    table.insert(kids, ui.label({ text = detail, height = 16, fontSize = 11, color = "on_surface_variant", maxLines = 1 }))
   end
-  return card({ flexGrow = 1 }, {
-    sectionTitle("cpu", "System", nil, nil, "system"),
-    ui.column({ gap = 10 }, rows),
+  return card({ width = width, padding = 10, gap = 5, clip = true }, kids)
+end
+
+local function processTable(view, compact)
+  local columnWidth = compact and 65 or 92
+  local function sortButton(key, title, tooltip)
+    local selected = processSort == key
+    return ui.button({
+      key = "sort-processes-" .. key, width = columnWidth, height = 27,
+      glyph = selected and "arrow-down" or "arrows-sort", text = title, variant = selected and "primary" or "ghost",
+      tooltip = tooltip, onClick = function()
+        processSort = key
+        update()
+      end,
+    })
+  end
+  local heading = ui.row({ gap = 6, align = "center", height = 28, paddingH = 6 }, {
+    ui.label({
+      text = "Apps and processes", fontSize = 13, fontWeight = "bold", color = "on_surface",
+      flexGrow = 1, maxLines = 1,
+    }),
+    sortButton("cpu", "CPU", "Sort by recent CPU usage across all cores"),
+    sortButton("ram", "RAM", "Sort by resident memory. Shared pages may count more than once."),
+  })
+  local rows = {}
+  for _, item in ipairs(view.processes and view.processes[processSort] or {}) do
+    local name = item.name .. (item.count > 1 and ("  ×" .. item.count) or "")
+    table.insert(rows, ui.row({
+      key = "system-process-" .. item.name, height = 29, gap = 6, align = "center",
+      paddingH = 6, radius = 7, fill = "surface_container_high/0.65",
+    }, {
+      ui.label({ text = name, fontSize = 12, color = "on_surface", flexGrow = 1, maxLines = 1 }),
+      ui.column({ width = columnWidth, align = "end" }, {
+        ui.label({ text = string.format("%.1f%%", item.cpu), fontSize = 12, color = "on_surface_variant" }),
+      }),
+      ui.column({ width = columnWidth, align = "end" }, {
+        ui.label({ text = formatMemory(item.rss), fontSize = 12, color = "on_surface_variant" }),
+      }),
+    }))
+  end
+  if #rows == 0 then
+    table.insert(rows, ui.label({
+      text = view.error or (view.busy and "Sampling process usage…" or "No processes reported"),
+      fontSize = 12, color = "on_surface_variant", maxLines = 2,
+    }))
+  end
+  return card({ key = "system-processes", flexGrow = 1, padding = 8, gap = 6, clip = true }, {
+    heading,
+    ui.scroll({ key = "system-process-list-" .. processSort, flexGrow = 1, gap = 4 }, rows),
   })
 end
+
+local function systemDetails(width, height)
+  local governor = governorButton(width < 630)
+  local title = sectionTitle("cpu", "System", nil, governor, "system")
+  local stats = noctalia.systemStats()
+  if stats == nil then
+    return card({ flexGrow = 1, padding = 12 }, { title, monitorMessage() })
+  end
+
+  local view = updateSystemSamples(stats)
+  local compact = width < 650 or height < 350
+  local graphW = math.floor((width - 10) / 2)
+  local graphH = math.clamp(math.floor((height - 172) * 0.36), 28, 140)
+  local cpuDetail, ramDetail
+  if not compact then
+    if stats.cpu.tempC ~= nil then cpuDetail = string.format("%.0f°C", stats.cpu.tempC) end
+    if stats.loadAvg and stats.loadAvg[1] ~= nil then
+      local load = string.format("Load %.2f", stats.loadAvg[1])
+      cpuDetail = cpuDetail and (cpuDetail .. " · " .. load) or load
+    end
+    if stats.ram.usedMb ~= nil and stats.ram.totalMb ~= nil then
+      ramDetail = formatMemory(stats.ram.usedMb * 1024 ^ 2) .. " used of " .. formatMemory(stats.ram.totalMb * 1024 ^ 2)
+    end
+    cpuDetail = cpuDetail or " "
+    ramDetail = ramDetail or " "
+  end
+
+  local kids = {
+    title,
+    ui.row({ gap = 10 }, {
+      resourceGraph("CPU", "primary", view.cpu, cpuDetail, graphW, graphH),
+      resourceGraph("RAM", "tertiary", view.ram, ramDetail, width - 10 - graphW, graphH),
+    }),
+  }
+  local storage = not compact and systemDisk() or nil
+  if storage ~= nil then
+    local detail = string.format("System disk · %.0f%% used", storage.usagePercent)
+    if storage.availableBytes ~= nil then detail = detail .. " · " .. formatMemory(storage.availableBytes) .. " available" end
+    table.insert(kids, ui.label({ text = detail, height = 18, fontSize = 12, color = "on_surface_variant", maxLines = 1 }))
+  end
+  table.insert(kids, processTable(view, compact))
+  return ui.column({ width = width, height = height, gap = compact and 6 or 9 }, kids)
+end
+
 
 ------------------------------------------------------------------ to-do (fully editable; done tasks stay, checked)
 
@@ -2680,7 +2810,7 @@ function update()
   elseif maximizedCard == "todo" then
     body = cachedTodoCard(math.max(48, width - 146))
   elseif maximizedCard == "system" then
-    body = systemCard()
+    body = systemDetails(width, height)
   elseif maximizedCard == "github" then
     body = githubDetails(width, height)
   else
