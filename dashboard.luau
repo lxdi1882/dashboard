@@ -2125,7 +2125,10 @@ end
 local function header(width, height, monitor, stacked)
   local wallpaper = monitor and noctalia.wallpaperPath(monitor)
   local hasWallpaper = type(wallpaper) == "string" and wallpaper ~= ""
-  local radius, padding = 17, 14
+  local radius = 17
+  local paddingH = stacked and 12 or (width >= 960 and 20 or 16)
+  local paddingV = height >= 96 and 14 or 12
+  if stacked then paddingV = height >= 144 and 12 or 8 end
   local foreground = hasWallpaper and "#ffffff" or "on_surface"
   local secondary = hasWallpaper and "#d4d9e3" or "on_surface_variant"
   local accent = hasWallpaper and "#e7ebf2" or "primary"
@@ -2154,10 +2157,11 @@ local function header(width, height, monitor, stacked)
     controlSize = "sm", tooltip = "Close", onClick = closeDash,
   })
 
-  local identityWidth = not stacked and math.floor((width - 2 * padding) * 0.32) or nil
-  local identity = profileIdentity(stacked and 44 or (height - 24), foreground, secondary, border, identityWidth)
+  local available = width - 2 * paddingH
+  local identityWidth = not stacked and math.floor(available * 0.32) or nil
+  local avatarSize = stacked and 44 or math.min(58, height - 2 * paddingV)
+  local identity = profileIdentity(avatarSize, foreground, secondary, border, identityWidth)
   local weatherWidth = showWeather and ((detailed and 190 or 88) + gap) or 0
-  local available = width - 2 * padding
   local previewWidth = stacked and available or (available - identityWidth - clockWidth - 32 - weatherWidth - 1 - 4 * gap)
   local preview = nextUpPreview(foreground, secondary, math.max(1, previewWidth))
   local row = { identity }
@@ -2184,7 +2188,8 @@ local function header(width, height, monitor, stacked)
 
   if stacked then
     table.insert(layers, ui.column({
-      key = "profile-content", height = height, translateY = lift, paddingH = padding, gap = 5, justify = "center",
+      key = "profile-content", height = height, translateY = lift,
+      paddingH = paddingH, paddingV = paddingV, gap = 5, justify = "center",
     }, {
       ui.row({ height = 52, gap = gap, align = "center" }, row),
       ui.box({ height = 1, fill = border }),
@@ -2192,7 +2197,8 @@ local function header(width, height, monitor, stacked)
     }))
   else
     table.insert(layers, ui.row({
-      key = "profile-content", height = height, translateY = lift, paddingH = padding, gap = gap, align = "center",
+      key = "profile-content", height = height, translateY = lift,
+      paddingH = paddingH, paddingV = paddingV, gap = gap, align = "center",
     }, row))
   end
   return ui.column({
@@ -2490,7 +2496,8 @@ function update()
   end
   local width = cardW - pad * 2
   local stackProfile = width < 690
-  local headerHeight = stackProfile and 124 or (short and 68 or 78)
+  local headerHeight = short and 84 or 96
+  if stackProfile then headerHeight = cardH < 500 and 136 or 144 end
   local height = math.max(0, cardH - 2 * pad - 3 * colGap - headerHeight - 36)
   local monitor = layer.outputName() or (g and g.name) or "default"
 
