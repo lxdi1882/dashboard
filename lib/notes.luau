@@ -33,6 +33,7 @@ local editorRevision = 0
 local vaultRoot = nil
 local showEditor = true
 local saving = false
+local confirmDelete, deleting
 local status = nil
 
 local function message(text)
@@ -129,6 +130,7 @@ local function loadFolder(path, targetPage)
 end
 
 local function readNote(path, edit)
+  confirmDelete = nil
   viewingAttachment = false
   reading = not edit
   previewState = nil
@@ -149,6 +151,7 @@ local function readNote(path, edit)
 end
 
 local function readAttachment(path)
+  confirmDelete = nil
   selection = path
   viewingAttachment = true
   showEditor = true
@@ -165,7 +168,7 @@ local function readAttachment(path)
 end
 
 local function saveNote(path)
-  if saving or saved == nil then return end
+  if saving or deleting or confirmDelete or selection ~= path or saved == nil then return end
   local draft = drafts[path]
   if draft == nil or draft.revision ~= saved.revision then return end
   if dataDir == nil or not noctalia.mkdirAll(dataDir) then
@@ -216,8 +219,53 @@ end
 
 local function openSticky()
   noteRequest = noteRequest + 1
+  confirmDelete = nil
+  status = nil
   selection = nil
   showEditor = true
+  update()
+end
+
+local function deleteNote(path)
+  if confirmDelete ~= path or path ~= selection or saving or deleting or saved == nil then return end
+  local root = vaultRoot
+  deleting = path
+  confirmDelete = nil
+  vaultCommand("delete", path, { saved.revision }, function(data)
+    deleting = nil
+    if root ~= vaultRoot then
+      update()
+      return
+    end
+    if data.ok then
+      if drafts[path] ~= nil then
+        drafts[path] = nil
+        persistDrafts()
+      end
+      if selection == path then
+        noteRequest = noteRequest + 1
+        previewState = nil
+        saved = nil
+        selection = nil
+        status = "Note moved to Trash"
+      end
+      if folder == (string.match(path, "^(.*)/[^/]+$") or "") then
+        loadFolder(folder, page)
+      end
+      if search.query ~= "" then
+        search.results, search.error, search.more = nil, nil, false
+        search.runAt = noctalia.nowMs()
+      end
+    elseif selection == path then
+      if data.conflict then
+        readNote(path, not reading)
+        status = "This note changed on disk. Review it before deleting."
+      else
+        status = data.error or "Could not move this note to Trash."
+      end
+    end
+    update()
+  end)
   update()
 end
 
@@ -229,6 +277,8 @@ local function prepareVault()
   search = { text = "", query = "", revision = search.revision + 1 }
   noteRequest = noteRequest + 1
   drafts = loadDrafts(root)
+  confirmDelete = nil
+  status = nil
   selection = nil
   folder = ""
   showEditor = true
@@ -663,7 +713,7 @@ end
 local function editor(width, height)
   if selection == nil then
     local input = stickyInput(math.max(1, height - 64))
-    return { datedTitle("Sticky note", stickyModified, width), input, editorFeedback(stickyError or "Saved as you type") }
+    return { datedTitle("Sticky note", stickyModified, width), input, editorFeedback(draftError or status or stickyError or "Saved as you type") }
   end
 
   local path = selection
@@ -684,7 +734,9 @@ local function editor(width, height)
   local draft = drafts[path]
   local conflict = draft ~= nil and saved ~= nil and saved.revision ~= draft.revision
   local controls = {}
-  if saved ~= nil or draft ~= nil then
+  local confirming = confirmDelete == path
+  local moving = deleting == path
+  if not confirming and (saved ~= nil or draft ~= nil) then
     table.insert(controls, ui.button({
       key = "vault-reading-toggle", text = reading and "Edit" or "Read",
       glyph = reading and "pencil" or "book", variant = "ghost", controlSize = "sm",
@@ -695,7 +747,7 @@ local function editor(width, height)
       end,
     }))
   end
-  if conflict or (noteError ~= nil and draft ~= nil) then
+  if not confirming and not moving and (conflict or (noteError ~= nil and draft ~= nil)) then
     table.insert(controls, ui.button({
       key = "vault-copy-draft", text = "Copy draft", variant = "ghost", controlSize = "sm",
       onClick = function()
@@ -716,10 +768,31 @@ local function editor(width, height)
         update()
       end,
     }))
-  elseif saved ~= nil and not reading then
+  elseif not confirming and not moving and saved ~= nil and not reading then
     table.insert(controls, ui.button({
       key = "vault-save", text = saving and "Saving…" or "Save", variant = "primary", controlSize = "sm",
-      enabled = draft ~= nil and not saving, onClick = function() saveNote(path) end,
+      enabled = draft ~= nil and not saving and not deleting, onClick = function() saveNote(path) end,
+    }))
+  end
+  if confirming then
+    table.insert(controls, ui.button({
+      key = "vault-delete-confirm", text = "Move to Trash", glyph = "trash", variant = "destructive", controlSize = "sm",
+      onClick = function() deleteNote(path) end,
+    }))
+    table.insert(controls, ui.button({
+      key = "vault-delete-cancel", text = "Cancel", variant = "ghost", controlSize = "sm",
+      onClick = function() confirmDelete = nil; update() end,
+    }))
+  elseif saved ~= nil and not moving then
+    table.insert(controls, ui.spacer({ flexGrow = 1 }))
+    table.insert(controls, ui.button({
+      key = "vault-delete", glyph = "trash", tooltip = "Delete note", variant = "ghost", controlSize = "sm",
+      enabled = not saving and not deleting,
+      onClick = function()
+        if selection ~= path or saving or deleting then return end
+        confirmDelete = path
+        update()
+      end,
     }))
   end
   local contentHeight = math.max(1, height - 102)
@@ -734,9 +807,10 @@ local function editor(width, height)
     local base = draft and draft.revision or saved.revision
     content = ui.input({
       key = "vault-editor-" .. path .. "-" .. editorRevision, value = draft and draft.text or saved.text,
-      multiline = true, flexGrow = 1, focus = true, fontSize = 13, placeholder = "Write Markdown…",
+      multiline = true, flexGrow = 1, focus = true, enabled = not confirming and not moving,
+      fontSize = 13, placeholder = "Write Markdown…",
       onChange = function(value)
-        if selection ~= path then return end
+        if selection ~= path or deleting == path then return end
         local previous = drafts[path]
         if saved ~= nil and value == saved.text and not saving then
           drafts[path] = nil
@@ -753,7 +827,9 @@ local function editor(width, height)
   table.insert(children, ui.column({
     key = "vault-document-viewport", width = width, height = contentHeight, clip = true,
   }, content and { content } or {}))
-  local feedback = draftError or status or noteError
+  local feedback = (confirming and (draft and "Move this note to Trash? Unsaved edits will be discarded." or "Move this note to Trash?"))
+    or (moving and "Moving note to Trash…")
+    or draftError or status or noteError
     or (conflict and "This file changed on disk. Your draft is still here.")
     or (saved == nil and "Opening note…")
     or (draft ~= nil and "Draft saved locally · Save to update the vault file")
@@ -778,7 +854,11 @@ function Notes.details(width, height, title)
     local back = ui.button({
       key = "notes-browse", text = showEditor and "Browse vault" or "Editor",
       glyph = showEditor and "folder" or "arrow-left", variant = "ghost", controlSize = "sm",
-      onClick = function() showEditor = not showEditor; update() end,
+      onClick = function()
+        confirmDelete = nil
+        showEditor = not showEditor
+        update()
+      end,
     })
     local children = { back }
     local contentHeight = paneHeight - 58

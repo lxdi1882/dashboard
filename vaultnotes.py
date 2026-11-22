@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 from urllib.parse import unquote, urlsplit
@@ -331,6 +332,20 @@ def save(path, expected, draft_path):
     return {"ok": True, "revision": revision(content), "modified": int(path.stat().st_mtime)}
 
 
+def trash_note(root, relative, path, expected):
+    if path != root / relative:
+        raise ValueError("Notes reached through symbolic links cannot be moved to Trash.")
+    if revision(note_bytes(path)) != expected:
+        return {"ok": False, "conflict": True}
+    try:
+        result = subprocess.run(["gio", "trash", "--", str(path)], capture_output=True, check=False)
+    except FileNotFoundError as error:
+        raise ValueError("Moving notes to Trash requires gio.") from error
+    if result.returncode != 0:
+        raise ValueError("Could not move this note to Trash.")
+    return {"ok": True}
+
+
 def command(args):
     operation, vault, relative, *extra = args
     root = Path(vault).resolve()
@@ -359,6 +374,9 @@ def command(args):
     if operation == "save":
         expected, draft_path = extra
         return save(path, expected, Path(draft_path))
+    if operation == "delete":
+        expected, = extra
+        return trash_note(root, relative, path, expected)
     raise ValueError("Unknown vault operation.")
 
 
