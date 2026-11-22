@@ -36,11 +36,6 @@ local showEditor = true
 local saving = false
 local confirmDelete, deleting
 local status = nil
-local paneMotion = {}
-
-function Notes.resetMotion()
-  paneMotion = {}
-end
 
 local function message(text)
   return ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 3 })
@@ -924,67 +919,18 @@ local function editor(width, height)
   return children
 end
 
-local function browserView()
-  if folderDeleteTarget ~= nil then return "confirm-folder:" .. folder end
-  if search.query ~= "" then return "search" end
-  if entries ~= nil then return "folder:" .. page .. ":" .. folder end
-end
-
-local function editorView()
-  if selection == nil then return "sticky" end
-  if confirmDelete == selection then return "confirm-note:" .. selection end
-  if viewingAttachment then
-    if asset or noteError then return "attachment:" .. selection end
-  elseif not reading then
-    if saved or drafts[selection] or noteError then return "edit:" .. selection end
-  elseif noteError or (previewState and (previewState.data or previewState.error)) then
-    return "read:" .. selection
-  end
-end
-
-local function animatePane(slot, view, width, height, children, progress)
-  local state = paneMotion[slot]
-  if not state then
-    state = {}
-    paneMotion[slot] = state
-  end
-  if view == nil then
-    state.started = nil
-  elseif state.view ~= view then
-    state.started = state.view and noctalia.nowMs()
-    state.view = view
-  end
-  return function()
-    local remaining = state.started and progress and (1 - progress(noctalia.nowMs() - state.started)) or 0
-    if remaining <= 0 then state.started = nil end
-    return ui.column({ width = width, height = height, clip = true }, {
-      ui.column({ key = "notes-pane-" .. slot, width = width, height = height, gap = 6,
-        opacity = 1 - 0.26 * remaining, translateY = 5 * remaining,
-      }, children),
-    }), remaining > 0
-  end
-end
-
-function Notes.details(width, height, title, progress)
+function Notes.details(width, height, title)
   prepareVault()
   local wide = width >= 770
   local paneHeight = math.max(1, height - 40)
-  local drawBody
+  local body
   if wide then
     local sidebarWidth = math.clamp(math.floor(width * 0.26), 200, 310)
     local editorWidth = width - sidebarWidth - 10
-    local sidebarRows = browser(sidebarWidth - 20, paneHeight - 20)
-    local editorRows = editor(editorWidth - 24, paneHeight - 24)
-    local drawBrowser = animatePane("browser", browserView(), sidebarWidth - 20, paneHeight - 20, sidebarRows, progress)
-    local drawEditor = animatePane("editor", editorView(), editorWidth - 24, paneHeight - 24, editorRows, progress)
-    drawBody = function()
-      local sidebar, sidebarMoving = drawBrowser()
-      local document, documentMoving = drawEditor()
-      return ui.row({ key = "notes-workspace-wide", width = width, height = paneHeight, gap = 10, clip = true }, {
-        surface({ width = sidebarWidth, height = paneHeight, padding = 10 }, { sidebar }),
-        surface({ width = editorWidth, height = paneHeight, padding = 12 }, { document }),
-      }), sidebarMoving or documentMoving
-    end
+    body = ui.row({ key = "notes-workspace-wide", width = width, height = paneHeight, gap = 10, clip = true }, {
+      surface({ width = sidebarWidth, height = paneHeight, padding = 10, gap = 6 }, browser(sidebarWidth - 20, paneHeight - 20)),
+      surface({ width = editorWidth, height = paneHeight, padding = 12, gap = 6 }, editor(editorWidth - 24, paneHeight - 24)),
+    })
   else
     local back = ui.button({
       key = "notes-browse", text = showEditor and "Browse vault" or "Editor",
@@ -995,25 +941,17 @@ function Notes.details(width, height, title, progress)
         update()
       end,
     })
-    local contentWidth, contentHeight = width - 20, math.max(1, paneHeight - 58)
-    local rows = showEditor and editor(contentWidth, contentHeight) or browser(contentWidth, contentHeight)
-    local view
-    if showEditor then view = editorView() else view = browserView() end
-    local drawPane = animatePane("compact", view, contentWidth, contentHeight, rows, progress)
-    drawBody = function()
-      local pane, moving = drawPane()
-      return surface({
-        key = "notes-workspace-compact", width = width, height = paneHeight, padding = 10, gap = 6,
-      }, { back, pane }), moving
+    local children = { back }
+    local contentHeight = paneHeight - 58
+    for _, child in ipairs(showEditor and editor(width - 20, contentHeight) or browser(width - 20, contentHeight)) do
+      table.insert(children, child)
     end
+    body = surface({ key = "notes-workspace-compact", width = width, height = paneHeight, padding = 10, gap = 6 }, children)
   end
-  local heading = ui.column({ height = 32 }, { title })
-  local function draw()
-    local body, moving = drawBody()
-    return ui.column({ width = width, height = height, gap = 8, clip = true }, { heading, body }), moving
-  end
-  local tree, moving = draw()
-  return tree, moving and draw or nil
+  return ui.column({ width = width, height = height, gap = 8, clip = true }, {
+    ui.column({ height = 32 }, { title }),
+    body,
+  })
 end
 
 return Notes
