@@ -37,6 +37,11 @@ local saving = false
 local confirmDelete, deleting
 local status = nil
 local paneMotion = {}
+local folderStarted, noteStarted
+
+local function loadingFor(started)
+  return started ~= nil and noctalia.nowMs() - started >= 150
+end
 
 function Notes.resetMotion()
   paneMotion = {}
@@ -124,6 +129,7 @@ local function loadFolder(path, targetPage)
   page = targetPage or 0
   hasNextPage = false
   entries = nil
+  folderStarted = noctalia.nowMs()
   folderError = nil
   folderRequest = folderRequest + 1
   local request = folderRequest
@@ -147,6 +153,7 @@ local function readNote(path, edit)
   noteError = nil
   status = nil
   showEditor = true
+  noteStarted = noctalia.nowMs()
   noteRequest = noteRequest + 1
   local request = noteRequest
   vaultCommand("read", path, nil, function(data)
@@ -165,6 +172,7 @@ local function readAttachment(path)
   showEditor = true
   asset = nil
   noteError = nil
+  noteStarted = noctalia.nowMs()
   noteRequest = noteRequest + 1
   local request = noteRequest
   vaultCommand("attachment", path, nil, function(data)
@@ -247,9 +255,11 @@ local function deleteItem(path, folderId)
     return item == path or (isFolder and insideFolder(item, path))
   end
   deleting = path
-  confirmDelete, folderDeleteTarget, folderDeleteFeedback = nil, nil, nil
+  folderDeleteFeedback = nil
   vaultCommand(isFolder and "delete-folder" or "delete", path, { folderId or saved.revision }, function(data)
     deleting = nil
+    if confirmDelete == path then confirmDelete = nil end
+    if folderDeleteTarget == path then folderDeleteTarget = nil end
     if root ~= vaultRoot then
       update()
       return
@@ -553,6 +563,7 @@ local function browser(width, height)
   local directory = folder ~= "" and string.match(folder, "([^/]+)$") or "Obsidian vault"
   if folderDeleteTarget ~= nil then
     local path, identity = folder, folderIdentity
+    local moving = deleting == path
     local warning = "Move this folder and everything in it to Trash?"
     for draftPath in pairs(drafts) do
       if insideFolder(draftPath, path) then
@@ -560,14 +571,16 @@ local function browser(width, height)
         break
       end
     end
-    table.insert(rows, ui.column({ width = width, height = 28, align = "stretch" }, {
+    table.insert(rows, ui.row({ width = width, height = 32, align = "center" }, {
       ui.label({ text = directory, fontSize = 13, fontWeight = "bold", maxLines = 1 }),
     }))
-    table.insert(rows, message(warning))
+    table.insert(rows, ui.column({ height = 48 }, {
+      message(moving and "Moving folder to Trash…" or warning),
+    }))
     table.insert(rows, ui.row({ height = 32, gap = 4, align = "center" }, {
       ui.button({
         key = "vault-folder-delete-confirm", text = "Move to Trash", variant = "destructive", controlSize = "sm",
-        onClick = function()
+        enabled = not moving, onClick = function()
           if folderDeleteTarget == path and folder == path and folderIdentity == identity then
             deleteItem(path, identity)
           end
@@ -575,7 +588,7 @@ local function browser(width, height)
       }),
       ui.button({
         key = "vault-folder-delete-cancel", text = "Cancel", variant = "ghost", controlSize = "sm",
-        onClick = function() folderDeleteTarget = nil; update() end,
+        enabled = not moving, onClick = function() folderDeleteTarget = nil; update() end,
       }),
     }))
     return rows
@@ -634,7 +647,7 @@ local function browser(width, height)
       onClick = openVaultSettings,
     }))
   elseif entries == nil then
-    table.insert(children, message("Opening folder…"))
+    if loadingFor(folderStarted) then table.insert(children, message("Opening folder…")) end
   elseif #entries == 0 then
     table.insert(children, message("This folder is empty."))
   else
@@ -669,10 +682,10 @@ local function browser(width, height)
     remaining = remaining - (createError and 106 or 75)
   end
   local pageControls = page > 0 or hasNextPage
-  table.insert(rows, ui.scroll({
-    key = "vault-folder-" .. folder .. "-" .. page,
-    width = width, height = math.max(1, remaining - (pageControls and 38 or 0)), gap = 4,
-  }, children))
+  local listIndex = #rows + 1
+  local listHeight = math.max(1, remaining - (pageControls and 38 or 0))
+  local list = ui.scroll({ key = "vault-folder-" .. folder .. "-" .. page, flexGrow = 1, gap = 4 }, children)
+  table.insert(rows, list)
   if pageControls then
     local function pageButton(delta, label, enabled)
       return ui.button({
@@ -690,7 +703,15 @@ local function browser(width, height)
       pageButton(1, "Next", hasNextPage),
     }))
   end
-  return rows
+  return rows, {
+    index = listIndex,
+    view = entries ~= nil and ("folder:" .. page .. ":" .. folder) or nil,
+    draw = function(opacity)
+      return ui.column({ key = "vault-folder-viewport", width = width, height = listHeight,
+        opacity = opacity, clip = true,
+      }, { list })
+    end,
+  }
 end
 
 local function openAttachment(relative)
@@ -752,7 +773,9 @@ local function renderPreview(path, text, width)
   local view = loadPreview(path, text)
   local rows = {}
   if view.data == nil then
-    table.insert(rows, message(view.error or "Rendering preview…"))
+    if view.error or loadingFor(noteStarted) then
+      table.insert(rows, message(view.error or "Loading note…"))
+    end
   else
     for i, block in ipairs(view.data.blocks or {}) do
       if block.kind == "markdown" then
@@ -808,7 +831,7 @@ local function editor(width, height)
     if asset then
       if asset.image then table.insert(rows, previewImage(asset, width)) end
       table.insert(rows, linkRow(asset, "open-attachment"))
-    else
+    elseif noteError or loadingFor(noteStarted) then
       table.insert(rows, message(noteError or "Opening attachment…"))
     end
     return {
@@ -827,6 +850,7 @@ local function editor(width, height)
       glyph = reading and "pencil" or "book", variant = "ghost", controlSize = "sm",
       onClick = function()
         reading = not reading
+        noteStarted = noctalia.nowMs()
         editorRevision = editorRevision + 1
         update()
       end,
@@ -862,11 +886,11 @@ local function editor(width, height)
   if confirming then
     table.insert(controls, ui.button({
       key = "vault-delete-confirm", text = "Move to Trash", glyph = "trash", variant = "destructive", controlSize = "sm",
-      onClick = function() deleteNote(path) end,
+      enabled = not moving, onClick = function() deleteNote(path) end,
     }))
     table.insert(controls, ui.button({
       key = "vault-delete-cancel", text = "Cancel", variant = "ghost", controlSize = "sm",
-      onClick = function() confirmDelete = nil; update() end,
+      enabled = not moving, onClick = function() confirmDelete = nil; update() end,
     }))
   elseif saved ~= nil and not moving then
     table.insert(controls, ui.spacer({ flexGrow = 1 }))
@@ -909,46 +933,35 @@ local function editor(width, height)
       onSubmit = function() saveNote(path) end,
     })
   end
-  -- Fill a bounded viewport so the native reader and editor receive an exact height.
-  table.insert(children, ui.column({
-    key = "vault-document-viewport", width = width, height = contentHeight, clip = true,
-  }, content and { content } or {}))
-  local feedback = (confirming and (draft and "Move this note to Trash? Unsaved edits will be discarded." or "Move this note to Trash?"))
-    or (moving and "Moving note to Trash…")
+  local feedback = (moving and "Moving note to Trash…")
+    or (confirming and (draft and "Move this note to Trash? Unsaved edits will be discarded." or "Move this note to Trash?"))
     or draftError or status or noteError
     or (conflict and "This file changed on disk. Your draft is still here.")
-    or (saved == nil and "Opening note…")
+    or (saved == nil and loadingFor(noteStarted) and "Loading note…")
     or (draft ~= nil and "Draft saved locally · Save to update the vault file")
     or (not reading and "Markdown · Ctrl+Enter to save")
-  table.insert(children, editorFeedback(feedback))
-  return children
+  children[3] = content or false
+  children[4] = editorFeedback(feedback)
+  return children, {
+    index = 3,
+    view = reading and previewState and previewState.data and ("read:" .. path) or nil,
+    draw = function(opacity)
+      -- A fixed viewport gives the native reader and editor an exact height.
+      return ui.column({ key = "vault-document-viewport", width = width, height = contentHeight,
+        opacity = opacity, clip = true,
+      }, content and { content } or {})
+    end,
+  }
 end
 
-local function browserView()
-  if folderDeleteTarget ~= nil then return "confirm-folder:" .. folder end
-  if search.query ~= "" then return "search" end
-  if entries ~= nil then return "folder:" .. page .. ":" .. folder end
-end
-
-local function editorView()
-  if selection == nil then return "sticky" end
-  if confirmDelete == selection then return "confirm-note:" .. selection end
-  if viewingAttachment then
-    if asset or noteError then return "attachment:" .. selection end
-  elseif not reading then
-    if saved or drafts[selection] or noteError then return "edit:" .. selection end
-  elseif noteError or (previewState and (previewState.data or previewState.error)) then
-    return "read:" .. selection
-  end
-end
-
-local function animatePane(slot, view, width, height, children, progress)
+local function drawPane(slot, children, content, progress)
   local state = paneMotion[slot]
   if not state then
     state = {}
     paneMotion[slot] = state
   end
-  if view == nil then
+  local view = content and content.view
+  if not view then
     state.started = nil
   elseif state.view ~= view then
     state.started = state.view and noctalia.nowMs()
@@ -957,11 +970,10 @@ local function animatePane(slot, view, width, height, children, progress)
   return function()
     local remaining = state.started and progress and (1 - progress(noctalia.nowMs() - state.started)) or 0
     if remaining <= 0 then state.started = nil end
-    return ui.column({ width = width, height = height, clip = true }, {
-      ui.column({ key = "notes-pane-" .. slot, width = width, height = height, gap = 6,
-        opacity = 1 - 0.26 * remaining, translateY = 5 * remaining,
-      }, children),
-    }), remaining > 0
+    if content then
+      children[content.index] = content.draw(1 - 0.1 * remaining)
+    end
+    return children, remaining > 0
   end
 end
 
@@ -973,16 +985,16 @@ function Notes.details(width, height, title, progress)
   if wide then
     local sidebarWidth = math.clamp(math.floor(width * 0.26), 200, 310)
     local editorWidth = width - sidebarWidth - 10
-    local sidebarRows = browser(sidebarWidth - 20, paneHeight - 20)
-    local editorRows = editor(editorWidth - 24, paneHeight - 24)
-    local drawBrowser = animatePane("browser", browserView(), sidebarWidth - 20, paneHeight - 20, sidebarRows, progress)
-    local drawEditor = animatePane("editor", editorView(), editorWidth - 24, paneHeight - 24, editorRows, progress)
+    local sidebarRows, list = browser(sidebarWidth - 20, paneHeight - 20)
+    local editorRows, document = editor(editorWidth - 24, paneHeight - 24)
+    local drawBrowser = drawPane("browser", sidebarRows, list, progress)
+    local drawEditor = drawPane("editor", editorRows, document, progress)
     drawBody = function()
       local sidebar, sidebarMoving = drawBrowser()
       local document, documentMoving = drawEditor()
       return ui.row({ key = "notes-workspace-wide", width = width, height = paneHeight, gap = 10, clip = true }, {
-        surface({ width = sidebarWidth, height = paneHeight, padding = 10 }, { sidebar }),
-        surface({ width = editorWidth, height = paneHeight, padding = 12 }, { document }),
+        surface({ width = sidebarWidth, height = paneHeight, padding = 10, gap = 6 }, sidebar),
+        surface({ width = editorWidth, height = paneHeight, padding = 12, gap = 6 }, document),
       }), sidebarMoving or documentMoving
     end
   else
@@ -996,15 +1008,20 @@ function Notes.details(width, height, title, progress)
       end,
     })
     local contentWidth, contentHeight = width - 20, math.max(1, paneHeight - 58)
-    local rows = showEditor and editor(contentWidth, contentHeight) or browser(contentWidth, contentHeight)
-    local view
-    if showEditor then view = editorView() else view = browserView() end
-    local drawPane = animatePane("compact", view, contentWidth, contentHeight, rows, progress)
+    local rows, content
+    if showEditor then
+      rows, content = editor(contentWidth, contentHeight)
+    else
+      rows, content = browser(contentWidth, contentHeight)
+    end
+    local drawContent = drawPane("compact", rows, content, progress)
     drawBody = function()
-      local pane, moving = drawPane()
+      local pane, moving = drawContent()
+      local children = { back }
+      for _, child in ipairs(pane) do table.insert(children, child) end
       return surface({
         key = "notes-workspace-compact", width = width, height = paneHeight, padding = 10, gap = 6,
-      }, { back, pane }), moving
+      }, children), moving
     end
   end
   local heading = ui.column({ height = 32 }, { title })

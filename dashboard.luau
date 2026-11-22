@@ -77,7 +77,7 @@ local function easeOut(elapsed, duration)
 end
 
 local function notesMotionProgress(elapsed)
-  return easeOut(elapsed, 155 * motionScale)
+  return easeOut(elapsed, 115 * motionScale)
 end
 
 local viewMotion
