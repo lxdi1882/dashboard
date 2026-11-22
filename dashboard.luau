@@ -942,7 +942,7 @@ local function rangeSum(n)
 end
 
 -- segmented control
-local function rangeToggle()
+local function rangeToggle(compact)
   local pills = {}
   for _, r in ipairs(RANGES) do
     local active = r.k == screenRange
@@ -950,7 +950,7 @@ local function rangeToggle()
       key = "rg" .. r.k,
       flexGrow = 1,
       justify = "center",
-      paddingV = 6,
+      paddingV = compact and 4 or 6,
       radius = 9,
       fill = active and "primary" or "surface_container_high/0",
       onClick = function()
@@ -964,13 +964,13 @@ local function rangeToggle()
     }, {
       ui.label({
         text = r.label,
-        fontSize = 12,
+        height = compact and 17 or nil, fontSize = 12,
         fontWeight = active and "bold" or "normal",
         color = active and "on_primary" or "on_surface_variant",
       }),
     }))
   end
-  return ui.row({ gap = 2, padding = 3, radius = 12, fill = "surface_container_high" }, pills)
+  return ui.row({ height = compact and 32 or nil, gap = 2, padding = 3, radius = 12, fill = "surface_container_high" }, pills)
 end
 
 local function screenMessage(text, innerW, color)
@@ -980,7 +980,7 @@ end
 
 
 -- labels under the chart, each one sitting under the first bar of its group
-local function axisRow(bars, width, gap, step)
+local function axisRow(bars, width, gap, step, compact)
   local cells = {}
   for i = 1, #bars, step do
     local b = bars[i]
@@ -990,7 +990,7 @@ local function axisRow(bars, width, gap, step)
       ui.box({ width = 1, height = 4, fill = "outline_variant" }),
       ui.label({
         text = b.top or "",
-        maxWidth = segW,
+        height = compact and 14 or nil, maxWidth = segW,
         fontSize = segW < 33 and 10 or 11,
         fontWeight = b.today and "bold" or "normal",
         color = b.today and "primary" or "on_surface",
@@ -1000,7 +1000,7 @@ local function axisRow(bars, width, gap, step)
     if b.sub ~= nil and segW >= 20 then
       table.insert(lines, ui.label({
         text = b.sub,
-        maxWidth = segW,
+        height = compact and 14 or nil, maxWidth = segW,
         fontSize = 10,
         color = b.today and "primary" or "on_surface_variant",
         maxLines = 1,
@@ -1011,14 +1011,17 @@ local function axisRow(bars, width, gap, step)
   return ui.row({ gap = gap, align = "start" }, cells)
 end
 
-local function screenCard(innerW)
+local function screenCard(innerW, chartOnly)
   local rows = {}
+  local model = {
+    title = sectionTitle("device-desktop", "Screen time", nil, nil, "screen"),
+    rows = rows, apps = {},
+  }
   local listRows = {}
   local listTitle = nil
   local otherSec = 0
   local screenFocus = maximizedCard == "screen"
   local controls
-  local chartIndex
 
   if screen == nil then
     table.insert(rows, screenMessage("Loading…", innerW))
@@ -1067,7 +1070,7 @@ local function screenCard(innerW)
         end,
       })
     else
-      controls = rangeToggle()
+      controls = rangeToggle(not screenFocus)
     end
     table.insert(rows, controls)
 
@@ -1171,20 +1174,29 @@ local function screenCard(innerW)
     end
     table.insert(rows, ui.row({ align = "end", gap = 8 }, {
       ui.column({ gap = 0 }, {
-        ui.label({ text = fmtDur(total), fontSize = HERO_FS, fontWeight = "bold", color = "on_surface" }),
-        ui.label({ text = heroLabel, fontSize = 11, color = "on_surface_variant" }),
+        ui.label({
+          text = fmtDur(total), height = not screenFocus and (HERO_FS + 6) or nil,
+          fontSize = HERO_FS, fontWeight = "bold", color = "on_surface",
+        }),
+        ui.label({ text = heroLabel, height = not screenFocus and 14 or nil, fontSize = 11, color = "on_surface_variant" }),
       }),
       ui.spacer({ flexGrow = 1 }),
       ui.column({ gap = 0, align = "end" }, {
-        ui.label({ text = statValue, fontSize = 15, fontWeight = "bold", color = "on_surface", textAlign = "right" }),
-        ui.label({ text = statLabel, fontSize = 11, color = "on_surface_variant", textAlign = "right" }),
+        ui.label({
+          text = statValue, height = not screenFocus and 20 or nil, fontSize = 15,
+          fontWeight = "bold", color = "on_surface", textAlign = "right",
+        }),
+        ui.label({
+          text = statLabel, height = not screenFocus and 14 or nil,
+          fontSize = 11, color = "on_surface_variant", textAlign = "right",
+        }),
       }),
     }))
 
     -- 4. chart + aligned axis
     if #bars > 0 then
       local inset = screenFocus and 14 or 8
-      local labelGap = screenFocus and 12 or 8
+      local labelGap = screenFocus and 12 or 6
       local plotWidth = math.max(1, innerW - inset * 2)
       local gap = plotWidth < 240 and 2 or ((#bars > 14) and 3 or 4)
       local width = math.max(1, math.min(48, math.floor((plotWidth - (#bars - 1) * gap) / #bars)))
@@ -1213,14 +1225,14 @@ local function screenCard(innerW)
       elseif width < 30 then
         step = 2
       end
-      chartIndex = #rows + 1
-      table.insert(rows, ui.column({ paddingH = inset, paddingV = 7, align = "start" }, {
+      model.chartIndex = #rows + 1
+      table.insert(rows, ui.column({ paddingH = inset, paddingV = screenFocus and 7 or 5, align = "start" }, {
         ui.row({ width = axisWidth, gap = gap, align = "end" }, cols),
         ui.box({ width = axisWidth, height = 1, fill = "outline_variant/0.5" }),
         ui.box({ key = "axis-label-gap", width = 1, height = labelGap, fill = "surface/0" }),
-        axisRow(bars, width, gap, step),
+        axisRow(bars, width, gap, step, not screenFocus),
       }))
-      if screen.mixed and hourly then
+      if screen.mixed and hourly and not chartOnly then
         table.insert(rows, ui.label({ text = "Hourly bars show apps", fontSize = 11, color = "on_surface_variant" }))
       end
     elseif detailDay ~= nil then
@@ -1228,6 +1240,8 @@ local function screenCard(innerW)
     else
       table.insert(rows, screenMessage("No activity recorded for this range yet.", innerW))
     end
+
+    if chartOnly then return model end
 
     -- 5. app list with matching chart colors
     local list = {}
@@ -1292,7 +1306,7 @@ local function screenCard(innerW)
     end
   end
 
-  local apps = {}
+  local apps = model.apps
   if listTitle ~= nil then
     table.insert(apps, ui.label({ text = listTitle, fontSize = 12, fontWeight = "bold", color = "on_surface_variant", maxLines = 1 }))
     if #listRows == 0 then
@@ -1330,10 +1344,7 @@ local function screenCard(innerW)
       }))
     end
   end
-  return {
-    title = sectionTitle("device-desktop", "Screen time", nil, nil, "screen"),
-    rows = rows, chartIndex = chartIndex, apps = apps,
-  }
+  return model
 end
 
 local function toggleHighlight(id)
@@ -1480,9 +1491,10 @@ local function screenHighlights(width)
   return rows
 end
 
-local function screenChart(innerW, chartIndex, rows)
+local function screenChart(innerW, chartIndex, rows, compact)
+  local gap = compact and 6 or 10
   if chartIndex == nil then
-    return ui.column({ gap = 10 }, rows)
+    return ui.column({ gap = gap }, rows)
   end
 
   -- Reserve the same space with or without a readout so hovering cannot move the bars.
@@ -1503,7 +1515,7 @@ local function screenChart(innerW, chartIndex, rows)
 
   local visibleRows = table.clone(rows)
   visibleRows[chartIndex] = ui.column({ gap = 3 }, { readout, rows[chartIndex] })
-  return ui.column({ gap = 10 }, visibleRows)
+  return ui.column({ gap = gap }, visibleRows)
 end
 
 local function screenSiteTrend(width, trend, calendar)
@@ -1600,14 +1612,16 @@ local function screenTab(id, text, active)
 end
 
 local function renderScreenCard(innerW, model, sidebarWidth)
-  local chart = screenChart(innerW, model.chartIndex, model.rows)
+  local inGrid = maximizedCard ~= "screen"
+  local chart = screenChart(innerW, model.chartIndex, model.rows, inGrid)
   local children = { model.title }
-  if maximizedCard ~= "screen" or #model.apps == 0 then
+  if inGrid or #model.apps == 0 then
     table.insert(children, chart)
     for _, node in ipairs(model.apps) do
       table.insert(children, node)
     end
-    return card({ flexGrow = 1, padding = CHART_H < 84 and 10 or 16, gap = CHART_H < 84 and 6 or 10 }, children)
+    local compact = inGrid or CHART_H < 84
+    return card({ flexGrow = 1, padding = compact and 10 or 16, gap = compact and 6 or 10 }, children)
   end
 
   local highlights = screenHighlights(sidebarWidth and (sidebarWidth - 18) or innerW)
@@ -2310,20 +2324,21 @@ local function cachedAgendaCard()
   return agendaCache.node
 end
 
-local function cachedScreenCard(innerW, sidebarWidth)
+local function cachedScreenCard(innerW, sidebarWidth, chartOnly)
   local screenFocus = maximizedCard == "screen"
   if loadingMore then
     -- The loading indicator and its timeout depend on the clock.
     screenCache = nil
-    return renderScreenCard(innerW, screenCard(innerW), sidebarWidth)
+    return renderScreenCard(innerW, screenCard(innerW, chartOnly), sidebarWidth)
   end
   local c = screenCache
   if c == nil or c.screen ~= screen or c.width ~= innerW or c.height ~= CHART_H
-      or c.range ~= screenRange or c.day ~= screenDay or c.selection ~= screenSel or c.focus ~= screenFocus then
+      or c.range ~= screenRange or c.day ~= screenDay or c.selection ~= screenSel or c.focus ~= screenFocus
+      or c.chartOnly ~= chartOnly or c.heroSize ~= HERO_FS then
     c = {
       screen = screen, width = innerW, height = CHART_H,
       range = screenRange, day = screenDay, selection = screenSel, focus = screenFocus,
-      model = screenCard(innerW),
+      chartOnly = chartOnly, heroSize = HERO_FS, model = screenCard(innerW, chartOnly),
     }
     screenCache = c
   end
@@ -2357,25 +2372,34 @@ local function summaryCard(id, value, detail)
   local info = Grid.cards[id]
   local kids = {
     sectionTitle(info.icon, info.title, nil, nil, id),
-    ui.label({ text = value, fontSize = 17, fontWeight = "bold", maxLines = 1, color = "on_surface" }),
+    ui.label({ text = value, height = 22, fontSize = 17, fontWeight = "bold", maxLines = 1, color = "on_surface" }),
   }
   if detail ~= nil then
-    table.insert(kids, ui.label({ text = detail, fontSize = 12, maxLines = 1, color = "on_surface_variant" }))
+    table.insert(kids, ui.label({ text = detail, height = 16, fontSize = 12, maxLines = 1, color = "on_surface_variant" }))
   end
   return card({ flexGrow = 1, padding = 10, gap = 4 }, kids)
 end
+
+-- Allow for controls, the hover readout, and two rows of axis labels before sizing the plot.
+local SCREEN_CHART_CHROME = 244
+local SCREEN_MIN_PLOT = 28
+local SCREEN_APP_SPACE = 128
 
 local function gridCard(id, w, h)
   if id == "github" then
     return githubCard(w, h)
   elseif id == "screen" then
-    if w < 256 or h < 278 then
-      local value = screen and screen.ok and fmtDur(screen.sec) or "No data yet"
-      return summaryCard(id, value, "Screen time today")
+    local plotSpace = h - SCREEN_CHART_CHROME
+    if w < 256 or plotSpace < SCREEN_MIN_PLOT then
+      local today = screen and screen.ok and screen.highlights and screen.highlights[1]
+      local top = today and today.items and today.items[1]
+      local value = screen and screen.ok and (fmtDur(screen.sec) .. " today") or "No data yet"
+      return summaryCard(id, value, top and ("Top · " .. top.name) or nil)
     end
-    CHART_H = math.clamp(math.floor((h - 185) * 0.5), 30, 84)
+    local hasListSpace = plotSpace >= SCREEN_MIN_PLOT + SCREEN_APP_SPACE
+    CHART_H = math.min(84, plotSpace - (hasListSpace and SCREEN_APP_SPACE or 0))
     HERO_FS = h >= 340 and 28 or 20
-    return cachedScreenCard(w - 32)
+    return cachedScreenCard(w - 32, nil, not hasListSpace)
   elseif id == "todo" then
     if h < 160 then
       local detail = todo and todo.ok and (todo.open .. " open · " .. todo.done .. " done") or "To-do list"
