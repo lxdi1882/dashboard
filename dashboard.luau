@@ -1881,8 +1881,29 @@ local function monitorMessage()
   })
 end
 
-local function systemCard(showGovernor)
+local systemHistory = { cpu = {}, ram = {}, lastAt = 0 }
+
+local function readSystemStats()
   local stats = noctalia.systemStats()
+  if stats == nil then return nil end
+  local now = noctalia.nowMs()
+  if #systemHistory.cpu == 0 or now - systemHistory.lastAt >= 2000 then
+    if now - systemHistory.lastAt > 5000 then
+      table.clear(systemHistory.cpu)
+      table.clear(systemHistory.ram)
+    elseif #systemHistory.cpu >= 45 then
+      table.remove(systemHistory.cpu, 1)
+      table.remove(systemHistory.ram, 1)
+    end
+    systemHistory.lastAt = now
+    table.insert(systemHistory.cpu, math.clamp(stats.cpu.usagePercent / 100, 0, 1))
+    table.insert(systemHistory.ram, math.clamp(stats.ram.usagePercent / 100, 0, 1))
+  end
+  return stats
+end
+
+local function systemCard(showGovernor)
+  local stats = readSystemStats()
   local rows = { sectionTitle("cpu", "System", nil, nil, "system") }
   if stats == nil then
     table.insert(rows, monitorMessage())
@@ -1902,22 +1923,12 @@ end
 local systemView
 local processSort = "cpu"
 
-local function updateSystemSamples(stats)
+local function updateProcessList()
   if systemView == nil or systemView.session ~= systemSession then
-    systemView = { session = systemSession, cpu = {}, ram = {}, sampleAt = 0, processesAt = 0 }
+    systemView = { session = systemSession, processesAt = 0 }
   end
   local view = systemView
   local now = noctalia.nowMs()
-  if now >= view.sampleAt then
-    view.sampleAt = now + 2000
-    if #view.cpu >= 45 then
-      table.remove(view.cpu, 1)
-      table.remove(view.ram, 1)
-    end
-    table.insert(view.cpu, math.clamp(stats.cpu.usagePercent / 100, 0, 1))
-    table.insert(view.ram, math.clamp(stats.ram.usagePercent / 100, 0, 1))
-  end
-
   if not view.busy and now >= view.processesAt then
     local dir = noctalia.pluginDir()
     view.processesAt = now + 4000
@@ -1953,20 +1964,55 @@ local function formatMemory(bytes)
   return string.format("%.0f MiB", bytes / 1024 ^ 2)
 end
 
-local function resourceGraph(name, color, values, detail, width, graphHeight)
-  local latest = values[#values] or 0
-  local points = #values > 1 and values or { latest, latest }
+local systemPlots = {}
+
+local function systemPlot(name, color, values, percent, width, height)
+  local current = #values < 2 and percent or nil
+  local plot = systemPlots[name]
+  if plot ~= nil and plot.at == systemHistory.lastAt and plot.current == current
+      and plot.width == width and plot.height == height then
+    return plot.node
+  end
+
+  local segments = {}
+  if current ~= nil then
+    local y = math.floor((height - 2) * (1 - math.clamp(current / 100, 0, 1)))
+    table.insert(segments, ui.box({ width = width, height = 2, translateY = y, radius = 1, fill = color }))
+  else
+    local dx = math.max(1, width - 2) / (#values - 1)
+    for i = 2, #values do
+      local y1 = 1 + (height - 2) * (1 - values[i - 1])
+      local y2 = 1 + (height - 2) * (1 - values[i])
+      local dy = y2 - y1
+      local length = math.sqrt(dx * dx + dy * dy) + 1
+      -- Anchor each segment in a one-pixel row and rotate it about its midpoint.
+      table.insert(segments, ui.row({ height = 1, align = "start" }, {
+        ui.box({
+          width = length, height = 2, radius = 1, fill = color,
+          translateX = 1 + dx * (i - 1.5) - length / 2,
+          translateY = (y1 + y2) / 2 - i + 1,
+          rotation = math.deg(math.atan(dy / dx)),
+        }),
+      }))
+    end
+  end
+  local node = ui.column({ key = "system-plot-" .. name, width = width, height = height, clip = true }, segments)
+  systemPlots[name] = {
+    at = systemHistory.lastAt, current = current, width = width, height = height, node = node,
+  }
+  return node
+end
+
+local function resourceGraph(name, color, values, percent, detail, width, graphHeight)
+  local plot = systemPlot(name, color, values, percent, math.max(1, width - 22), graphHeight)
   local kids = {
     ui.row({ height = 27, gap = 8, align = "center" }, {
       ui.label({ text = name, fontSize = 13, fontWeight = "bold", color = "on_surface", flexGrow = 1 }),
       ui.label({
-        text = string.format("%.0f%%", latest * 100), fontSize = 19, fontWeight = "bold", color = "on_surface",
+        text = string.format("%.0f%%", percent), fontSize = 19, fontWeight = "bold", color = "on_surface",
       }),
     }),
-    ui.graph({
-      key = "system-graph-" .. name, width = math.max(1, width - 22), height = graphHeight, values = points,
-      color = color, lineWidth = 2, fillOpacity = 0.14,
-    }),
+    plot,
   }
   if detail ~= nil then
     table.insert(kids, ui.label({ text = detail, height = 16, fontSize = 11, color = "on_surface_variant", maxLines = 1 }))
@@ -1974,7 +2020,32 @@ local function resourceGraph(name, color, values, detail, width, graphHeight)
   return card({ width = width, padding = 10, gap = 5, clip = true }, kids)
 end
 
+local processIcons = {}
+local processIconCount = 0
+local processIconBudget = 0
+local nextProcessIconLookup = 0
+
+local function processIcon(name)
+  local path = processIcons[name]
+  if path == nil and processIconBudget > 0 and processIconCount < 96
+      and not string.find(name, "/", 1, true) then
+    processIconBudget = processIconBudget - 1
+    processIconCount = processIconCount + 1
+    path = noctalia.appIconPath(name, 24) or ""
+    processIcons[name] = path
+  end
+  if path ~= nil and path ~= "" then
+    return ui.image({ path = path, width = 18, height = 18, fit = "contain" })
+  end
+  return ui.glyph({ name = "app-window", size = 17, color = "on_surface_variant" })
+end
+
 local function processTable(view, compact)
+  local now = noctalia.nowMs()
+  if now >= nextProcessIconLookup then
+    processIconBudget = 2
+    nextProcessIconLookup = now + 1000
+  end
   local columnWidth = compact and 65 or 92
   local function sortButton(key, title, tooltip)
     local selected = processSort == key
@@ -2002,6 +2073,7 @@ local function processTable(view, compact)
       key = "system-process-" .. item.name, height = 29, gap = 6, align = "center",
       paddingH = 6, radius = 7, fill = "surface_container_high/0.65",
     }, {
+      ui.column({ width = 20, height = 20, align = "center", justify = "center" }, { processIcon(item.name) }),
       ui.label({ text = name, fontSize = 12, color = "on_surface", flexGrow = 1, maxLines = 1 }),
       ui.column({ width = columnWidth, align = "end" }, {
         ui.label({ text = string.format("%.1f%%", item.cpu), fontSize = 12, color = "on_surface_variant" }),
@@ -2026,12 +2098,12 @@ end
 local function systemDetails(width, height)
   local governor = governorButton(width < 630)
   local title = sectionTitle("cpu", "System", nil, governor, "system")
-  local stats = noctalia.systemStats()
+  local stats = readSystemStats()
   if stats == nil then
     return card({ flexGrow = 1, padding = 12 }, { title, monitorMessage() })
   end
 
-  local view = updateSystemSamples(stats)
+  local view = updateProcessList()
   local compact = width < 650 or height < 350
   local graphW = math.floor((width - 10) / 2)
   local graphH = math.clamp(math.floor((height - 172) * 0.36), 28, 140)
@@ -2052,8 +2124,8 @@ local function systemDetails(width, height)
   local kids = {
     title,
     ui.row({ gap = 10 }, {
-      resourceGraph("CPU", "primary", view.cpu, cpuDetail, graphW, graphH),
-      resourceGraph("RAM", "tertiary", view.ram, ramDetail, width - 10 - graphW, graphH),
+      resourceGraph("CPU", "primary", systemHistory.cpu, stats.cpu.usagePercent, cpuDetail, graphW, graphH),
+      resourceGraph("RAM", "tertiary", systemHistory.ram, stats.ram.usagePercent, ramDetail, width - 10 - graphW, graphH),
     }),
   }
   local storage = not compact and systemDisk() or nil
@@ -2675,7 +2747,7 @@ local function gridCard(id, w, h)
     return cachedAgendaCard(w, h)
   end
   if w < 210 or h < 151 then
-    local stats = noctalia.systemStats()
+    local stats = readSystemStats()
     local detail = stats and string.format("CPU %.0f%% · RAM %.0f%%", stats.cpu.usagePercent, stats.ram.usagePercent) or "System monitor is off"
     return summaryCard(id, detail)
   end
