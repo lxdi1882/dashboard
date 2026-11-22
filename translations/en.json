@@ -6,6 +6,7 @@
   "settings.graph_palette.theme": "Follow Noctalia theme",
   "settings.graph_palette.github": "GitHub greens",
   "settings.todo_file.label": "To Do file (todo.json)",
+  "settings.vault_path.label": "Obsidian vault folder",
   "settings.window_size.label": "Dashboard window size",
   "settings.window_size.compact": "Compact",
   "settings.window_size.normal": "Normal",

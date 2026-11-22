@@ -7,6 +7,7 @@ noctalia.log("dashboard layer started")
 local Todo = require("./lib/todo.luau")
 local Layout = require("./lib/layout.luau")
 local Calendar = require("./lib/calendar.luau")
+local Notes = require("./lib/notes.luau")
 
 local function compactGraph()
   return noctalia.getConfig("graph_size") == "compact"
@@ -2789,6 +2790,8 @@ local function gridCard(id, w, h)
     return cachedTodoCard(math.max(48, w - 146))
   elseif id == "calendar" then
     return cachedAgendaCard(w, h)
+  elseif id == "notes" then
+    return Notes.card(sectionTitle("note", "Sticky note", nil, nil, "notes"))
   end
   return systemCard(w, h)
 end
@@ -2846,6 +2849,7 @@ local function gridLayout(monitor, width, height)
   if activeGrid == nil or activeGrid.monitor ~= monitor or activeGrid.width ~= width or activeGrid.totalHeight ~= height then
     local preferred = profiles.monitors[monitor] or profiles.default or legacy
     local placed = Grid.reflow(preferred, width, height)
+    if profiles.version == 1 then Grid.placeNewNotes(placed, width, height) end
     local showLauncher = false
     for _, id in ipairs(Grid.ids) do
       if placed[id] == nil then
@@ -2857,6 +2861,7 @@ local function gridLayout(monitor, width, height)
     if showLauncher then
       canvasHeight = math.max(0, height - 38)
       placed = Grid.reflow(preferred, width, canvasHeight)
+      if profiles.version == 1 then Grid.placeNewNotes(placed, width, canvasHeight) end
     end
     activeGrid = { monitor = monitor, width = width, height = canvasHeight, totalHeight = height, placed = placed, launcher = showLauncher }
   end
@@ -2922,6 +2927,8 @@ function update()
     body = cachedTodoCard(math.max(48, width - 146))
   elseif maximizedCard == "system" then
     body = systemDetails(width, height)
+  elseif maximizedCard == "notes" then
+    body = Notes.details(width, sectionTitle("note", "Notes", nil, nil, "notes"))
   elseif maximizedCard == "github" then
     body = githubDetails(width, height)
   else

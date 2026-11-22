@@ -4,13 +4,14 @@ local Grid = {}
 Grid.cols = 24
 Grid.rows = 14
 Grid.gap = 8
-Grid.ids = { "github", "screen", "calendar", "todo", "system" }
+Grid.ids = { "github", "screen", "calendar", "todo", "system", "notes" }
 Grid.cards = {
   github = { title = "GitHub", icon = "brand-github", minW = 218, minH = 104, rect = { x = 0, y = 0, w = 15, h = 5 } },
   screen = { title = "Screen Time", icon = "device-desktop", minW = 224, minH = 104, rect = { x = 8, y = 5, w = 7, h = 9 } },
   calendar = { title = "Calendar", icon = "calendar-event", minW = 208, minH = 104, rect = { x = 0, y = 5, w = 8, h = 9 } },
-  todo = { title = "To-do", icon = "list-check", minW = 238, minH = 104, rect = { x = 15, y = 0, w = 9, h = 8 } },
-  system = { title = "System", icon = "cpu", minW = 198, minH = 104, rect = { x = 15, y = 8, w = 9, h = 6 } },
+  todo = { title = "To-do", icon = "list-check", minW = 238, minH = 104, rect = { x = 15, y = 0, w = 9, h = 6 } },
+  system = { title = "System", icon = "cpu", minW = 198, minH = 104, rect = { x = 15, y = 10, w = 9, h = 4 } },
+  notes = { title = "Notes", icon = "note", minW = 208, minH = 132, rect = { x = 15, y = 6, w = 9, h = 4 } },
 }
 
 function Grid.defaults()
@@ -156,6 +157,15 @@ function Grid.reflow(layout, width, height)
   return placed
 end
 
+-- Offer the new card in a spare slot when loading a layout saved before Notes.
+function Grid.placeNewNotes(placed, width, height)
+  if placed.notes ~= nil then return end
+  local w, h = Grid.minimum("notes", width, height)
+  local origin = { x = Grid.cols - w, y = 0 }
+  placed.notes = nearest(placed, "notes", origin, math.max(w, 6), math.max(h, 4))
+    or nearest(placed, "notes", origin, w, h)
+end
+
 function Grid.pixels(r, width, height, gap)
   local sx, sy = (width + gap) / Grid.cols, (height + gap) / Grid.rows
   local x = math.floor(r.x * sx + 0.5)
@@ -177,8 +187,9 @@ function Grid.load()
   local dir = noctalia.pluginDataDir()
   local raw = dir and noctalia.readFile(dir .. "/grid-layout.json")
   local data = raw and noctalia.json.decode(raw)
-  local profiles = { monitors = {} }
+  local profiles = { monitors = {}, version = 1 }
   if type(data) == "table" then
+    profiles.version = data.version == 2 and 2 or 1
     if type(data.default) == "table" then
       profiles.default = sanitize(data.default)
     end
@@ -195,7 +206,7 @@ end
 
 function Grid.save(profiles)
   local dir = noctalia.pluginDataDir()
-  local data = noctalia.json.encode(profiles)
+  local data = noctalia.json.encode({ monitors = profiles.monitors, default = profiles.default, version = 2 })
   if dir == nil or data == nil then
     return false
   end
