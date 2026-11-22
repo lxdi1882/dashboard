@@ -372,10 +372,22 @@ def main():
 
     highlights = []
     for length in (1, 7, 14):
-        by = sum_usage(daily[day] for day, _ in dates[-length:])
+        period = days[-length:]
+        history = days[-max(7, length):]
+        by = sum_usage(daily[day["d"]] for day in period)
         highlights.append({
-            "total": sum(day["sec"] for day in days[-length:]),
-            "items": [{**metadata(item), "sec": by[item]} for item in rank_usage(by)[:3]],
+            "total": sum(day["sec"] for day in period),
+            "items": [
+                {
+                    **metadata(item),
+                    "sec": by[item],
+                    "history": [
+                        {"date": day["d"], "sec": daily[day["d"]].get(item, 0), "recorded": day["sec"] > 0}
+                        for day in history
+                    ],
+                }
+                for item in rank_usage(by)[:3]
+            ],
         })
 
     print(json.dumps({

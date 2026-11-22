@@ -779,6 +779,27 @@ local screenDay = nil -- date opened from the 3-day or 14-day chart
 local screenSel = nil -- date and hour of the selected hourly bar
 local screenDetailsTab = "apps"
 local highlightPeriod = 1
+local highlight = { fraction = 0, from = 0, target = 0, started = 0 }
+local HIGHLIGHT_ANIM_MS = 160
+
+local function stepHighlight()
+  local duration = HIGHLIGHT_ANIM_MS * math.abs(highlight.target - highlight.from)
+  local elapsed = noctalia.nowMs() - highlight.started
+  if elapsed >= duration then
+    highlight.fraction = highlight.target
+  else
+    local t = math.clamp(elapsed / duration, 0, 1)
+    highlight.fraction = highlight.from + (highlight.target - highlight.from) * (1 - (1 - t) ^ 3)
+  end
+  return highlight.fraction ~= highlight.target
+end
+
+local function resetHighlight()
+  highlight.id = nil
+  highlight.from = 0
+  highlight.fraction = 0
+  highlight.target = 0
+end
 local screenSite = nil
 local screenSiteDay = nil
 
@@ -1309,6 +1330,85 @@ local function screenCard(innerW)
   }
 end
 
+local function toggleHighlight(id)
+  stepHighlight()
+  if highlight.id ~= id then
+    resetHighlight()
+    highlight.id = id
+  end
+  highlight.from = highlight.fraction
+  highlight.target = 1 - highlight.target
+  highlight.started = noctalia.nowMs()
+  layer.setNeedsFrameTick(true)
+  update()
+end
+
+local function highlightDetails(item, width)
+  local history = item.history or {}
+  local height = #history > 0 and 84 or 28
+  local rows = {}
+  if #history > 0 then
+    local peak, active = history[1], 0
+    for _, day in ipairs(history) do
+      if day.sec >= peak.sec then peak = day end
+      if day.sec > 0 then active = active + 1 end
+    end
+
+    local summary
+    if highlightPeriod == 1 then
+      local yesterday = history[#history - 1]
+      summary = yesterday and yesterday.recorded and ("Yesterday · " .. fmtDur(yesterday.sec)) or "No screen time recorded yesterday"
+    else
+      summary = string.format("Peak %s · %s   ·   Used on %d of %d days",
+        os.date("%a, %b %d", dateToTime(peak.date)), fmtDur(peak.sec), active, #history)
+    end
+    table.insert(rows, ui.label({
+      key = "highlight-summary", text = summary, fontSize = 11, maxLines = 2, height = 30,
+      color = "on_surface_variant",
+    }))
+
+    local bars = {}
+    local gap = 3
+    local barW = math.max(1, math.floor((width - 20 - (#history - 1) * gap) / #history))
+    for _, day in ipairs(history) do
+      local status = day.recorded and fmtDur(day.sec) or "No screen time recorded"
+      table.insert(bars, ui.column({
+        key = "highlight-day-" .. day.date, width = barW, height = 24, justify = "end",
+        tooltip = os.date("%a, %b %d", dateToTime(day.date)) .. " · " .. status,
+      }, {
+        ui.box({
+          width = barW, height = math.max(2, math.floor(24 * day.sec / math.max(1, peak.sec))),
+          radius = 2, fill = day.sec > 0 and "primary" or "outline_variant",
+        }),
+      }))
+    end
+    table.insert(rows, ui.row({ gap = gap, align = "end" }, bars))
+    table.insert(rows, ui.row({ gap = 4 }, {
+      ui.label({
+        text = os.date("%b %d", dateToTime(history[1].date)), fontSize = 11,
+        color = "on_surface_variant", flexGrow = 1,
+      }),
+      ui.label({ text = "Today", fontSize = 11, color = "on_surface_variant" }),
+    }))
+  else
+    table.insert(rows, ui.label({
+      text = "Daily breakdown unavailable", fontSize = 11, color = "on_surface_variant",
+    }))
+  end
+
+  if item.domain ~= nil then
+    height = height + 34
+    table.insert(rows, ui.row({}, {
+      ui.button({
+        key = "highlight-site-" .. item.id, text = "View site trend", glyph = "arrow-right",
+        variant = "ghost", controlSize = "sm",
+        onClick = function() openScreenSite(item.domain) end,
+      }),
+    }))
+  end
+  return ui.column({ height = height, paddingH = 10, paddingV = 3, gap = 4 }, rows), height
+end
+
 local function screenHighlights(width)
   local periods = screen.highlights
   if periods == nil or periods[highlightPeriod] == nil then
@@ -1322,55 +1422,55 @@ local function screenHighlights(width)
       text = label, flexGrow = 1, controlSize = "sm",
       variant = highlightPeriod == i and "primary" or "ghost",
       onClick = function()
-        highlightPeriod = i
-        openScreenSite(nil)
+        if highlightPeriod ~= i then
+          highlightPeriod = i
+          resetHighlight()
+          openScreenSite(nil)
+        end
       end,
     }))
   end
   local rows = {
-    sectionTitle("chart-bar", "Usage highlights"),
+    sectionTitle("chart-bar", "Usage highlights", report.total > 0 and (fmtDur(report.total) .. " total") or nil),
     ui.row({ gap = 4, align = "center" }, buttons),
   }
   local items = report.items or {}
-  local leader = items[1]
-  if leader == nil or report.total <= 0 then
+  if #items == 0 or report.total <= 0 then
     table.insert(rows, ui.label({ text = "No screen time recorded for this period.", fontSize = 12, color = "on_surface_variant" }))
     return rows
   end
 
-  local period = ({ "today", "over the last 7 days", "over the last 14 days" })[highlightPeriod]
-  local share = math.floor(100 * leader.sec / report.total + 0.5)
-  local story = string.format("You spent %s on it, about %d%% of your %s total.", fmtDur(leader.sec), share, fmtDur(report.total))
-  for i = 2, #items do
-    local item = items[i]
-    local byline = item.name .. " (" .. fmtDur(item.sec) .. ")"
-    story = story .. (i == 2 and " " or " and ") .. byline
-    if i == #items then
-      story = story .. " followed."
+  for i, item in ipairs(items) do
+    local expanded = highlight.id == item.id and highlight.target == 1
+    local label = (expanded and "Hide" or "Show") .. " details for " .. item.name
+    local click = function() toggleHighlight(item.id) end
+    local share = math.floor(100 * item.sec / report.total + 0.5)
+    local icon = item.icon ~= nil and item.icon ~= ""
+      and ui.image({ path = item.icon, width = 16, height = 16, fit = "contain" })
+      or ui.glyph({ name = item.domain and "world" or "app-window", size = 16, color = "on_surface_variant" })
+    local children = {
+      ui.row({ key = "highlight-summary-" .. item.id, gap = 6, align = "center", paddingH = 8, onClick = click }, {
+        ui.label({ text = tostring(i), minWidth = 12, fontSize = 11, color = "on_surface_variant" }),
+        icon,
+        ui.label({ text = item.name, maxLines = 1, flexGrow = 1, fontSize = 12, fontWeight = "bold", color = "on_surface" }),
+        ui.label({ text = fmtDur(item.sec) .. " · " .. share .. "%", fontSize = 12, color = "on_surface_variant" }),
+        ui.button({
+          key = "highlight-toggle-" .. item.id, glyph = expanded and "chevron-up" or "chevron-down",
+          tooltip = label, variant = "ghost", controlSize = "sm", onClick = click,
+        }),
+      }),
+    }
+    if highlight.id == item.id and highlight.fraction > 0 then
+      local detail, height = highlightDetails(item, width)
+      local visibleHeight = math.floor(height * highlight.fraction)
+      if visibleHeight > 0 then
+        table.insert(children, ui.column({ key = "highlight-details-" .. item.id, height = visibleHeight, clip = true }, { detail }))
+      end
     end
+    table.insert(rows, ui.column({
+      key = "highlight-" .. item.id, radius = 8, clip = true, fill = "surface_container_high",
+    }, children))
   end
-
-  local headline = {}
-  if leader.icon ~= nil and leader.icon ~= "" then
-    table.insert(headline, ui.image({ path = leader.icon, width = 17, height = 17, fit = "contain" }))
-  end
-  table.insert(headline, ui.label({
-    key = "usage-headline", text = leader.name .. " led " .. period,
-    fontSize = 16, fontWeight = "bold", maxLines = 2, flexGrow = 1, color = "on_surface",
-  }))
-  if leader.domain ~= nil then
-    table.insert(headline, ui.glyph({ name = "chevron-right", size = 14, color = "on_surface_variant" }))
-  end
-  table.insert(rows, ui.column({ gap = 6, paddingH = 6, paddingV = 5 }, {
-    ui.row({
-      key = "usage-lead", gap = 6, align = "center",
-      onClick = leader.domain and function() openScreenSite(leader.domain) end or nil,
-    }, headline),
-    ui.label({
-      key = "usage-brief", text = story, fontSize = 13, maxLines = 5,
-      maxWidth = math.max(1, width - 12), color = "on_surface_variant",
-    }),
-  }))
   return rows
 end
 
@@ -1990,13 +2090,17 @@ local function cachedScreenCard(innerW, sidebarWidth)
     screenCache = c
   end
   if c.node == nil or c.hover ~= screenHover or c.sidebarWidth ~= sidebarWidth or c.tab ~= screenDetailsTab
-      or c.site ~= screenSite or c.siteDay ~= screenSiteDay or c.highlightPeriod ~= highlightPeriod then
+      or c.site ~= screenSite or c.siteDay ~= screenSiteDay or c.highlightPeriod ~= highlightPeriod
+      or c.highlightId ~= highlight.id or c.highlightTarget ~= highlight.target or c.highlightFraction ~= highlight.fraction then
     c.hover = screenHover
     c.sidebarWidth = sidebarWidth
     c.tab = screenDetailsTab
     c.site = screenSite
     c.siteDay = screenSiteDay
     c.highlightPeriod = highlightPeriod
+    c.highlightId = highlight.id
+    c.highlightTarget = highlight.target
+    c.highlightFraction = highlight.fraction
     c.node = renderScreenCard(innerW, c.model, sidebarWidth)
   end
   return c.node
@@ -2165,17 +2269,18 @@ function update()
   local height = math.max(0, cardH - 2 * pad - 3 * colGap - headerHeight - 36)
   local monitor = layer.outputName() or (g and g.name) or "default"
 
-  local body
+  local body, screenBody
   if maximizedCard == "screen" then
     local sidebarWidth = width >= 900 and height >= 460 and math.floor((width - 34) * 0.35) or nil
     HERO_FS = short and 26 or 32
     if sidebarWidth ~= nil then
       CHART_H = math.clamp(height - 286, 80, 374)
-      body = cachedScreenCard(width - 58 - sidebarWidth, sidebarWidth)
     else
       CHART_H = math.clamp(math.floor((height - 230) * 0.40), 26, 100)
-      body = cachedScreenCard(width - 24)
     end
+    local innerW = sidebarWidth and (width - 58 - sidebarWidth) or (width - 24)
+    screenBody = function() return cachedScreenCard(innerW, sidebarWidth) end
+    body = screenBody()
   elseif maximizedCard == "calendar" then
     body = cachedAgendaCard()
   elseif maximizedCard == "todo" then
@@ -2194,7 +2299,7 @@ function update()
     body,
     ui.column({ height = 32 }, { footer() }),
   }
-  layoutCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids }
+  layoutCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids, screenBody = screenBody }
   renderLayout(animProgress())
 end
 
@@ -2209,8 +2314,13 @@ function onFrameTick(_deltaMs)
     noctalia.state.set("close_done", closeToken)
     return
   end
+  local before = highlight.fraction
+  local revealing = stepHighlight()
+  if layoutCache.screenBody and before ~= highlight.fraction then
+    layoutCache.kids[3] = layoutCache.screenBody()
+  end
   renderLayout(anim)
-  if closeToken == 0 and anim >= 1 then
+  if closeToken == 0 and anim >= 1 and not revealing then
     layer.setNeedsFrameTick(false)
   end
 end
