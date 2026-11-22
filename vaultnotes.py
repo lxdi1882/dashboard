@@ -332,17 +332,27 @@ def save(path, expected, draft_path):
     return {"ok": True, "revision": revision(content), "modified": int(path.stat().st_mtime)}
 
 
-def trash_note(root, relative, path, expected):
+def folder_identity(path):
+    info = path.stat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("The selected folder is unavailable.")
+    return f"{info.st_dev}:{info.st_ino}"
+
+
+def trash_item(root, relative, path, expected, is_folder):
+    if path == root or any(part.startswith(".") for part in Path(relative).parts):
+        raise ValueError("The vault root and hidden items cannot be moved to Trash.")
     if path != root / relative:
-        raise ValueError("Notes reached through symbolic links cannot be moved to Trash.")
-    if revision(note_bytes(path)) != expected:
+        raise ValueError("Items reached through symbolic links cannot be moved to Trash.")
+    identity = folder_identity(path) if is_folder else revision(note_bytes(path))
+    if identity != expected:
         return {"ok": False, "conflict": True}
     try:
         result = subprocess.run(["gio", "trash", "--", str(path)], capture_output=True, check=False)
     except FileNotFoundError as error:
-        raise ValueError("Moving notes to Trash requires gio.") from error
+        raise ValueError("Moving items to Trash requires gio.") from error
     if result.returncode != 0:
-        raise ValueError("Could not move this note to Trash.")
+        raise ValueError("Could not move this item to Trash.")
     return {"ok": True}
 
 
@@ -356,8 +366,12 @@ def command(args):
     path = within_vault(root, relative)
     if operation == "list":
         offset = max(0, int(extra[0])) * PAGE_SIZE if extra else 0
+        folder_id = folder_identity(path)
         entries = folder_entries(path)
-        return {"ok": True, "entries": entries[offset:offset + PAGE_SIZE], "more": offset + PAGE_SIZE < len(entries)}
+        return {
+            "ok": True, "folder_id": folder_id, "entries": entries[offset:offset + PAGE_SIZE],
+            "more": offset + PAGE_SIZE < len(entries),
+        }
     if operation == "read":
         raw = note_bytes(path)
         return {
@@ -374,9 +388,9 @@ def command(args):
     if operation == "save":
         expected, draft_path = extra
         return save(path, expected, Path(draft_path))
-    if operation == "delete":
+    if operation in {"delete", "delete-folder"}:
         expected, = extra
-        return trash_note(root, relative, path, expected)
+        return trash_item(root, relative, path, expected, operation == "delete-folder")
     raise ValueError("Unknown vault operation.")
 
 

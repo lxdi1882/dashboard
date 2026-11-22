@@ -24,6 +24,7 @@ local page = 0
 local hasNextPage = false
 local entries = nil
 local folderError = nil
+local folderIdentity, folderDeleteTarget, folderDeleteFeedback
 local folderRequest = 0
 local selection = nil
 local saved = nil
@@ -113,6 +114,7 @@ local function vaultCommand(operation, path, extra, callback)
 end
 
 local function loadFolder(path, targetPage)
+  folderIdentity, folderDeleteTarget, folderDeleteFeedback = nil, nil, nil
   folder = path
   page = targetPage or 0
   hasNextPage = false
@@ -124,6 +126,7 @@ local function loadFolder(path, targetPage)
     if request ~= folderRequest then return end
     entries = data.ok and data.entries or {}
     hasNextPage = data.more == true
+    folderIdentity = data.folder_id
     folderError = data.error
     update()
   end)
@@ -226,35 +229,58 @@ local function openSticky()
   update()
 end
 
-local function deleteNote(path)
-  if confirmDelete ~= path or path ~= selection or saving or deleting or saved == nil then return end
+local function insideFolder(path, parent)
+  return path ~= nil and string.sub(path, 1, #parent + 1) == parent .. "/"
+end
+
+local function deleteItem(path, folderId)
+  if saving or deleting or creating then return end
+  local isFolder = folderId ~= nil
   local root = vaultRoot
+  local parent = string.match(path, "^(.*)/[^/]+$") or ""
+  local function matches(item)
+    return item == path or (isFolder and insideFolder(item, path))
+  end
   deleting = path
-  confirmDelete = nil
-  vaultCommand("delete", path, { saved.revision }, function(data)
+  confirmDelete, folderDeleteTarget, folderDeleteFeedback = nil, nil, nil
+  vaultCommand(isFolder and "delete-folder" or "delete", path, { folderId or saved.revision }, function(data)
     deleting = nil
     if root ~= vaultRoot then
       update()
       return
     end
     if data.ok then
-      if drafts[path] ~= nil then
-        drafts[path] = nil
-        persistDrafts()
+      local changed = false
+      for draftPath in pairs(drafts) do
+        if matches(draftPath) then
+          drafts[draftPath] = nil
+          changed = true
+        end
       end
-      if selection == path then
+      if changed then persistDrafts() end
+      if matches(selection) then
         noteRequest = noteRequest + 1
         previewState = nil
         saved = nil
         selection = nil
-        status = "Note moved to Trash"
+        status = isFolder and "Folder moved to Trash" or "Note moved to Trash"
       end
-      if folder == (string.match(path, "^(.*)/[^/]+$") or "") then
+      if isFolder and matches(folder) then
+        createKind = nil
+        loadFolder(parent)
+        folderDeleteFeedback = "Folder moved to Trash"
+      elseif folder == parent then
         loadFolder(folder, page)
       end
       if search.query ~= "" then
         search.results, search.error, search.more = nil, nil, false
         search.runAt = noctalia.nowMs()
+      end
+    elseif isFolder then
+      if folder == path then
+        if data.conflict then loadFolder(path, page) end
+        folderDeleteFeedback = data.conflict and "This folder was replaced. Review it before deleting."
+          or data.error or "Could not move this folder to Trash."
       end
     elseif selection == path then
       if data.conflict then
@@ -269,6 +295,12 @@ local function deleteNote(path)
   update()
 end
 
+local function deleteNote(path)
+  if confirmDelete == path and path == selection and saved ~= nil then
+    deleteItem(path)
+  end
+end
+
 local function prepareVault()
   local setting = noctalia.getConfig("vault_path") or ""
   local root = setting == "" and "" or noctalia.expandPath(setting)
@@ -277,7 +309,7 @@ local function prepareVault()
   search = { text = "", query = "", revision = search.revision + 1 }
   noteRequest = noteRequest + 1
   drafts = loadDrafts(root)
-  confirmDelete = nil
+  confirmDelete, folderIdentity, folderDeleteTarget, folderDeleteFeedback = nil, nil, nil, nil
   status = nil
   selection = nil
   folder = ""
@@ -313,7 +345,7 @@ local function startCreation(kind)
 end
 
 local function finishCreation(value)
-  if createKind == nil or creating then return end
+  if createKind == nil or creating or deleting then return end
   local kind = createKind
   local path, root = folder, vaultRoot
   local name = value or createName
@@ -401,6 +433,7 @@ local function setSearch(value, submit)
   state.text = value
   local query = string.match(value, "^%s*(.-)%s*$")
   if query ~= state.query then
+    folderDeleteTarget = nil
     state.query = query
     state.results = nil
     state.error = nil
@@ -513,6 +546,35 @@ local function browser(width, height)
   end
 
   local directory = folder ~= "" and string.match(folder, "([^/]+)$") or "Obsidian vault"
+  if folderDeleteTarget ~= nil then
+    local path, identity = folder, folderIdentity
+    local warning = "Move this folder and everything in it to Trash?"
+    for draftPath in pairs(drafts) do
+      if insideFolder(draftPath, path) then
+        warning = "Move this folder and everything in it to Trash? Unsaved edits inside will be discarded."
+        break
+      end
+    end
+    table.insert(rows, ui.column({ width = width, height = 28, align = "stretch" }, {
+      ui.label({ text = directory, fontSize = 13, fontWeight = "bold", maxLines = 1 }),
+    }))
+    table.insert(rows, message(warning))
+    table.insert(rows, ui.row({ height = 32, gap = 4, align = "center" }, {
+      ui.button({
+        key = "vault-folder-delete-confirm", text = "Move to Trash", variant = "destructive", controlSize = "sm",
+        onClick = function()
+          if folderDeleteTarget == path and folder == path and folderIdentity == identity then
+            deleteItem(path, identity)
+          end
+        end,
+      }),
+      ui.button({
+        key = "vault-folder-delete-cancel", text = "Cancel", variant = "ghost", controlSize = "sm",
+        onClick = function() folderDeleteTarget = nil; update() end,
+      }),
+    }))
+    return rows
+  end
   local heading = {
     ui.label({ text = directory, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
   }
@@ -525,11 +587,24 @@ local function browser(width, height)
       end,
     }))
   end
+  if folder ~= "" and folderIdentity ~= nil then
+    local path, identity = folder, folderIdentity
+    table.insert(heading, ui.button({
+      key = "vault-folder-delete", glyph = "trash", variant = "ghost", controlSize = "sm", tooltip = "Delete folder",
+      enabled = not saving and not deleting and not creating,
+      onClick = function()
+        if folder ~= path or folderIdentity ~= identity or saving or deleting or creating then return end
+        confirmDelete = nil
+        folderDeleteTarget = path
+        update()
+      end,
+    }))
+  end
   if vaultRoot ~= "" and folderError == nil then
     table.insert(heading, ui.button({
       key = "vault-create", glyph = createKind and "x" or "plus", variant = "ghost", controlSize = "sm",
       tooltip = createKind and "Cancel creation" or "Create a note or folder",
-      enabled = not creating, onClick = function()
+      enabled = not creating and not deleting, onClick = function()
         if createKind then
           createKind = nil
           update()
@@ -579,6 +654,11 @@ local function browser(width, height)
   end
   table.insert(rows, ui.row({ height = 32, gap = 4, align = "center" }, heading))
   remaining = remaining - 38
+  local feedback = deleting == folder and "Moving folder to Trash…" or folderDeleteFeedback
+  if feedback ~= nil then
+    table.insert(rows, ui.column({ height = 36 }, { message(feedback) }))
+    remaining = remaining - 42
+  end
   if createKind then
     table.insert(rows, creationForm())
     remaining = remaining - (createError and 106 or 75)
@@ -735,7 +815,7 @@ local function editor(width, height)
   local conflict = draft ~= nil and saved ~= nil and saved.revision ~= draft.revision
   local controls = {}
   local confirming = confirmDelete == path
-  local moving = deleting == path
+  local moving = deleting ~= nil and (deleting == path or insideFolder(path, deleting))
   if not confirming and (saved ~= nil or draft ~= nil) then
     table.insert(controls, ui.button({
       key = "vault-reading-toggle", text = reading and "Edit" or "Read",
@@ -787,9 +867,10 @@ local function editor(width, height)
     table.insert(controls, ui.spacer({ flexGrow = 1 }))
     table.insert(controls, ui.button({
       key = "vault-delete", glyph = "trash", tooltip = "Delete note", variant = "ghost", controlSize = "sm",
-      enabled = not saving and not deleting,
+      enabled = not saving and not deleting and not creating,
       onClick = function()
-        if selection ~= path or saving or deleting then return end
+        if selection ~= path or saving or deleting or creating then return end
+        folderDeleteTarget = nil
         confirmDelete = path
         update()
       end,
@@ -810,7 +891,7 @@ local function editor(width, height)
       multiline = true, flexGrow = 1, focus = true, enabled = not confirming and not moving,
       fontSize = 13, placeholder = "Write Markdown…",
       onChange = function(value)
-        if selection ~= path or deleting == path then return end
+        if selection ~= path or (deleting ~= nil and (deleting == path or insideFolder(path, deleting))) then return end
         local previous = drafts[path]
         if saved ~= nil and value == saved.text and not saving then
           drafts[path] = nil
@@ -855,7 +936,7 @@ function Notes.details(width, height, title)
       key = "notes-browse", text = showEditor and "Browse vault" or "Editor",
       glyph = showEditor and "folder" or "arrow-left", variant = "ghost", controlSize = "sm",
       onClick = function()
-        confirmDelete = nil
+        confirmDelete, folderDeleteTarget = nil, nil
         showEditor = not showEditor
         update()
       end,
