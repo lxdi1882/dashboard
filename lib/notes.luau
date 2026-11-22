@@ -17,6 +17,7 @@ local createError = nil
 local createRevision = 0
 local creating = false
 local draftError = nil
+local search = { text = "", query = "", revision = 0 }
 local drafts
 local folder = ""
 local page = 0
@@ -52,7 +53,7 @@ local function persist(name, text)
   return noctalia.writeFile(temp, text) and noctalia.renameFile(temp, path)
 end
 
-local function stickyInput()
+local function stickyInput(height)
   if not stickyLoaded then
     stickyLoaded = true
     sticky = dataDir and noctalia.readFile(dataDir .. "/sticky-note.md") or ""
@@ -60,7 +61,8 @@ local function stickyInput()
     stickyModified = info and info.mtime or nil
   end
   return ui.input({
-    key = "dashboard-sticky-editor", value = sticky, multiline = true, flexGrow = 1,
+    key = "dashboard-sticky-editor", value = sticky, multiline = true,
+    height = height, flexGrow = height and 0 or 1,
     frameVisible = false, placeholder = "Write a quick note…", fontSize = 13,
     onChange = function(value)
       sticky = value
@@ -224,6 +226,7 @@ local function prepareVault()
   local root = setting == "" and "" or noctalia.expandPath(setting)
   if vaultRoot == root then return end
   vaultRoot = root
+  search = { text = "", query = "", revision = search.revision + 1 }
   noteRequest = noteRequest + 1
   drafts = loadDrafts(root)
   selection = nil
@@ -341,7 +344,124 @@ function Notes.tools()
   })
 end
 
-local function browser()
+local function setSearch(value, submit)
+  local state = search
+  local wasEmpty = state.query == ""
+  local hadResults = state.results ~= nil or state.error ~= nil
+  state.text = value
+  local query = string.match(value, "^%s*(.-)%s*$")
+  if query ~= state.query then
+    state.query = query
+    state.results = nil
+    state.error = nil
+    state.more = false
+    state.runAt = query ~= "" and (noctalia.nowMs() + 250) or nil
+  end
+  if submit and query ~= "" and state.activeQuery ~= query then state.runAt = 0 end
+  if submit or hadResults or wasEmpty ~= (query == "") then update() end
+end
+
+local function runSearch()
+  local state = search
+  if state.busy or not state.runAt or noctalia.nowMs() < state.runAt then return end
+  local query = state.query
+  state.runAt = nil
+  state.busy = true
+  state.activeQuery = query
+  vaultCommand("search", "", { query }, function(data)
+    if state ~= search then return end
+    state.busy = false
+    state.activeQuery = nil
+    if query == state.query and not state.runAt then
+      state.results = data.ok and data.results or {}
+      state.error = data.error
+      state.more = data.more == true
+    end
+    update()
+  end)
+end
+
+local function searchBar(width)
+  local hasQuery = search.query ~= ""
+  local children = {
+    ui.input({
+      key = "vault-search-" .. search.revision, value = search.text, height = 32,
+      width = width - (hasQuery and 36 or 0),
+      placeholder = "Search vault…",
+      onChange = function(value) setSearch(value, false) end,
+      onSubmit = function(value) setSearch(value, true) end,
+    }),
+  }
+  if hasQuery then
+    table.insert(children, ui.button({
+      key = "vault-search-clear", glyph = "x", height = 32, width = 32,
+      variant = "ghost", tooltip = "Clear vault search",
+      onClick = function()
+        search.revision = search.revision + 1
+        setSearch("", true)
+      end,
+    }))
+  end
+  return ui.row({ width = width, height = 32, gap = 4, align = "center", clip = true }, children)
+end
+
+local function searchResults(width, height)
+  runSearch()
+  local rows = {}
+  if search.error then
+    table.insert(rows, message(search.error))
+  elseif search.results == nil then
+    table.insert(rows, message("Searching vault…"))
+  elseif #search.results == 0 then
+    table.insert(rows, message("No matches in this vault."))
+  else
+    for _, result in ipairs(search.results) do
+      local path = result.relative
+      local isNote = result.kind == "note"
+      local parent = string.match(path, "^(.*)/[^/]+$") or "Vault"
+      local selected = selection == path
+      local resultWidth = math.max(1, width - 14)
+      local textWidth = math.max(1, resultWidth - 35)
+      local lines = {
+        ui.label({ text = result.title, fontSize = 12, fontWeight = "bold", maxWidth = textWidth, maxLines = 1, color = selected and "on_primary_container" or "on_surface" }),
+        ui.label({ text = parent, fontSize = 10, maxWidth = textWidth, maxLines = 1, color = "on_surface_variant" }),
+      }
+      if result.snippet ~= nil and result.snippet ~= "" then
+        table.insert(lines, ui.label({ text = result.snippet, fontSize = 11, maxWidth = textWidth, maxLines = 1, color = "on_surface_variant" }))
+      end
+      table.insert(rows, ui.row({
+        key = "vault-result-" .. path, width = resultWidth, height = #lines == 3 and 57 or 43, gap = 7,
+        paddingH = 7, align = "center", radius = 8, clip = true,
+        fill = selected and "primary_container" or "surface_container_high/0.55",
+        onClick = function()
+          if isNote then readNote(path) else readAttachment(path) end
+          update()
+        end,
+      }, {
+        ui.glyph({ name = isNote and "file-text" or "paperclip", size = 14, color = "primary" }),
+        ui.column({ flexGrow = 1, gap = 1, justify = "center", clip = true }, lines),
+      }))
+    end
+    if search.more then table.insert(rows, message("Refine your search for more results.")) end
+  end
+  return ui.scroll({ key = "vault-search-results-" .. search.query, width = width, height = math.max(1, height), gap = 4 }, rows)
+end
+
+local function browser(width, height)
+  local rows = {
+    browseRow("notes-select-sticky", "note", "Sticky note", selection == nil, openSticky),
+    ui.separator({ thickness = 1, color = "outline_variant" }),
+  }
+  local remaining = height - 45
+  if vaultRoot ~= "" then
+    table.insert(rows, searchBar(width))
+    remaining = remaining - 38
+  end
+  if search.query ~= "" then
+    table.insert(rows, searchResults(width, remaining))
+    return rows
+  end
+
   local directory = folder ~= "" and string.match(folder, "([^/]+)$") or "Obsidian vault"
   local heading = {
     ui.label({ text = directory, fontSize = 13, fontWeight = "bold", maxLines = 1, flexGrow = 1, color = "on_surface" }),
@@ -407,14 +527,18 @@ local function browser()
       end))
     end
   end
-  local rows = {
-    browseRow("notes-select-sticky", "note", "Sticky note", selection == nil, openSticky),
-    ui.separator({ thickness = 1, color = "outline_variant" }),
-    ui.row({ height = 32, gap = 4, align = "center" }, heading),
-    ui.scroll({ key = "vault-folder-" .. folder .. "-" .. page, flexGrow = 1, gap = 4 }, children),
-  }
-  if createKind then table.insert(rows, 4, creationForm()) end
-  if page > 0 or hasNextPage then
+  table.insert(rows, ui.row({ height = 32, gap = 4, align = "center" }, heading))
+  remaining = remaining - 38
+  if createKind then
+    table.insert(rows, creationForm())
+    remaining = remaining - (createError and 106 or 75)
+  end
+  local pageControls = page > 0 or hasNextPage
+  table.insert(rows, ui.scroll({
+    key = "vault-folder-" .. folder .. "-" .. page,
+    width = width, height = math.max(1, remaining - (pageControls and 38 or 0)), gap = 4,
+  }, children))
+  if pageControls then
     local function pageButton(delta, label, enabled)
       return ui.button({
         key = "vault-page-" .. label, text = label, controlSize = "sm", variant = "ghost", enabled = enabled,
@@ -459,7 +583,7 @@ end
 
 local function previewImage(block, width)
   return ui.image({
-    path = block.path, width = math.max(1, math.min(width - 24, 590)), height = width < 500 and 208 or 290,
+    path = block.path, width = math.max(1, math.min(width - 16, 590)), height = width < 500 and 208 or 290,
     radius = 9, fit = "contain", tooltip = "Open " .. block.title,
     onClick = function() openAttachment(block.relative) end,
   })
@@ -489,7 +613,7 @@ local function loadPreview(path, text)
   return state
 end
 
-local function renderPreview(path, text, width)
+local function renderPreview(path, text, width, height)
   local view = loadPreview(path, text)
   local rows = {}
   if view.data == nil then
@@ -497,7 +621,7 @@ local function renderPreview(path, text, width)
   else
     for i, block in ipairs(view.data.blocks or {}) do
       if block.kind == "markdown" then
-        table.insert(rows, ui.markdown({ key = "notes-markdown-" .. i, text = block.text, width = math.max(1, width - 32) }))
+        table.insert(rows, ui.markdown({ key = "notes-markdown-" .. i, text = block.text, width = math.max(1, width - 16) }))
       elseif block.kind == "attachment" and block.image then
         table.insert(rows, previewImage(block, width))
       else
@@ -511,13 +635,13 @@ local function renderPreview(path, text, width)
     end
     if #rows == 0 then table.insert(rows, message("This note is empty. Choose Edit to start writing.")) end
   end
-  return ui.scroll({ key = "vault-preview-" .. path, flexGrow = 1, gap = 8 }, rows)
+  return ui.scroll({ key = "vault-preview-" .. path, width = width, height = height, gap = 8 }, rows)
 end
 
 local function datedTitle(title, modified, width)
   local kids = {
     ui.label({
-      text = title, maxWidth = modified and math.max(100, math.floor(width * 0.55)) or nil,
+      text = title, maxWidth = math.max(1, width - (modified and 108 or 0)),
       maxLines = 1, fontSize = 15, fontWeight = "bold", color = "on_surface",
     }),
   }
@@ -527,31 +651,35 @@ local function datedTitle(title, modified, width)
       fontSize = 11, color = "on_surface_variant", maxLines = 1,
     }))
   end
-  return ui.row({ height = 24, gap = 8, align = "center" }, kids)
+  return ui.row({ width = width, height = 24, gap = 8, align = "center", clip = true }, kids)
 end
 
-local function editor(width)
+local function editorFeedback(text)
+  return ui.label({
+    text = text or "", height = 28, fontSize = 11, color = "on_surface_variant", maxLines = 2,
+  })
+end
+
+local function editor(width, height)
   if selection == nil then
-    local input = stickyInput()
-    local children = {
-      datedTitle("Sticky note", stickyModified, width),
-      input,
-      message(stickyError or "Saved as you type"),
-    }
-    return children
+    local input = stickyInput(math.max(1, height - 64))
+    return { datedTitle("Sticky note", stickyModified, width), input, editorFeedback(stickyError or "Saved as you type") }
   end
 
   local path = selection
   local title = string.match(path, "([^/]+)$") or path
   if viewingAttachment then
-    local children = { datedTitle(title, asset and asset.modified, width) }
+    local rows = {}
     if asset then
-      if asset.image then table.insert(children, previewImage(asset, width)) end
-      table.insert(children, linkRow(asset, "open-attachment"))
+      if asset.image then table.insert(rows, previewImage(asset, width)) end
+      table.insert(rows, linkRow(asset, "open-attachment"))
     else
-      table.insert(children, message(noteError or "Opening attachment…"))
+      table.insert(rows, message(noteError or "Opening attachment…"))
     end
-    return children
+    return {
+      datedTitle(title, asset and asset.modified, width),
+      ui.scroll({ key = "vault-attachment-" .. path, width = width, height = math.max(1, height - 30), gap = 8 }, rows),
+    }
   end
   local draft = drafts[path]
   local conflict = draft ~= nil and saved ~= nil and saved.revision ~= draft.revision
@@ -594,15 +722,18 @@ local function editor(width)
       enabled = draft ~= nil and not saving, onClick = function() saveNote(path) end,
     }))
   end
-  local children = { datedTitle(title, saved and saved.modified, width) }
-  if #controls > 0 then table.insert(children, ui.row({ gap = 4, height = 32, align = "center" }, controls)) end
+  local contentHeight = math.max(1, height - 102)
+  local children = {
+    datedTitle(title, saved and saved.modified, width),
+    ui.row({ gap = 4, height = 32, align = "center" }, controls),
+  }
   if (saved ~= nil or draft ~= nil) and reading then
-    table.insert(children, renderPreview(path, draft and draft.text or saved.text, width))
+    table.insert(children, renderPreview(path, draft and draft.text or saved.text, width, contentHeight))
   elseif saved ~= nil or draft ~= nil then
     local base = draft and draft.revision or saved.revision
     table.insert(children, ui.input({
       key = "vault-editor-" .. path .. "-" .. editorRevision, value = draft and draft.text or saved.text,
-      multiline = true, flexGrow = 1, fontSize = 13, placeholder = "Write Markdown…",
+      multiline = true, width = width, height = contentHeight, fontSize = 13, placeholder = "Write Markdown…",
       onChange = function(value)
         if selection ~= path then return end
         local previous = drafts[path]
@@ -616,25 +747,29 @@ local function editor(width)
       end,
       onSubmit = function() saveNote(path) end,
     }))
+  else
+    table.insert(children, ui.box({ width = 1, height = contentHeight, fill = "surface/0" }))
   end
   local feedback = draftError or status or noteError
     or (conflict and "This file changed on disk. Your draft is still here.")
     or (saved == nil and "Opening note…")
     or (draft ~= nil and "Draft saved locally · Save to update the vault file")
     or (not reading and "Markdown · Ctrl+Enter to save")
-  if feedback then table.insert(children, message(feedback)) end
+  table.insert(children, editorFeedback(feedback))
   return children
 end
 
-function Notes.details(width, title)
+function Notes.details(width, height, title)
   prepareVault()
   local wide = width >= 770
+  local paneHeight = math.max(1, height - 40)
   local body
   if wide then
     local sidebarWidth = math.clamp(math.floor(width * 0.26), 200, 310)
-    body = ui.row({ key = "notes-workspace-wide", flexGrow = 1, gap = 10 }, {
-      surface({ width = sidebarWidth, padding = 10, gap = 6 }, browser()),
-      surface({ width = width - sidebarWidth - 10, padding = 12, gap = 6 }, editor(width - sidebarWidth - 10)),
+    local editorWidth = width - sidebarWidth - 10
+    body = ui.row({ key = "notes-workspace-wide", width = width, height = paneHeight, gap = 10, clip = true }, {
+      surface({ width = sidebarWidth, height = paneHeight, padding = 10, gap = 6 }, browser(sidebarWidth - 20, paneHeight - 20)),
+      surface({ width = editorWidth, height = paneHeight, padding = 12, gap = 6 }, editor(editorWidth - 24, paneHeight - 24)),
     })
   else
     local back = ui.button({
@@ -643,10 +778,16 @@ function Notes.details(width, title)
       onClick = function() showEditor = not showEditor; update() end,
     })
     local children = { back }
-    for _, child in ipairs(showEditor and editor(width) or browser()) do table.insert(children, child) end
-    body = surface({ key = "notes-workspace-compact", flexGrow = 1, padding = 10, gap = 6 }, children)
+    local contentHeight = paneHeight - 58
+    for _, child in ipairs(showEditor and editor(width - 20, contentHeight) or browser(width - 20, contentHeight)) do
+      table.insert(children, child)
+    end
+    body = surface({ key = "notes-workspace-compact", width = width, height = paneHeight, padding = 10, gap = 6 }, children)
   end
-  return ui.column({ flexGrow = 1, gap = 8 }, { title, body })
+  return ui.column({ width = width, height = height, gap = 8, clip = true }, {
+    ui.column({ height = 32 }, { title }),
+    body,
+  })
 end
 
 return Notes

@@ -2665,14 +2665,22 @@ end
 
 ------------------------------------------------------------------ layout
 
+local lastOutputName, lastOutputGeometry
+
 local function outputGeometry()
-  local name = layer.outputName()
-  for _, o in ipairs(noctalia.outputs()) do
-    if (name == nil and o.focused) or o.name == name then
-      return o
+  -- Async callbacks can lack a layer output name. Keep using the display
+  -- hosting this layer when a callback arrives after focus has moved.
+  local name = layer.outputName() or lastOutputName
+  if name ~= lastOutputName then
+    lastOutputName, lastOutputGeometry = name, nil
+  end
+  for _, output in ipairs(noctalia.outputs()) do
+    if (name == nil and output.focused) or output.name == name then
+      lastOutputGeometry = output
+      break
     end
   end
-  return nil
+  return lastOutputGeometry
 end
 
 local function renderLayout(anim)
@@ -2929,7 +2937,7 @@ function update()
   local headerHeight = short and 84 or 96
   if stackProfile then headerHeight = cardH < 500 and 136 or 144 end
   local height = math.max(0, cardH - 2 * pad - 3 * colGap - headerHeight - 36)
-  local monitor = layer.outputName() or (g and g.name) or "default"
+  local monitor = lastOutputName or (g and g.name) or "default"
 
   local body, screenBody
   if maximizedCard == "screen" then
@@ -2950,7 +2958,7 @@ function update()
   elseif maximizedCard == "system" then
     body = systemDetails(width, height)
   elseif maximizedCard == "notes" then
-    body = Notes.details(width, sectionTitle("note", "Notes", nil, Notes.tools(), "notes"))
+    body = Notes.details(width, height, sectionTitle("note", "Notes", nil, Notes.tools(), "notes"))
   elseif maximizedCard == "github" then
     body = githubDetails(width, height)
   else
@@ -2958,7 +2966,7 @@ function update()
   end
 
   local kids = {
-    ui.column({ height = headerHeight }, { header(width, headerHeight, g and g.name or layer.outputName(), stackProfile) }),
+    ui.column({ height = headerHeight }, { header(width, headerHeight, lastOutputName or (g and g.name), stackProfile) }),
     ui.separator({ thickness = 1, color = "outline_variant/0.5" }),
     body,
     ui.column({ height = 32 }, { footer() }),

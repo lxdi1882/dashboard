@@ -233,6 +233,73 @@ def note_bytes(path):
     return raw
 
 
+SEARCH_LIMIT = 32
+
+
+def search_excerpt(text, terms):
+    best_line, best_count = "", 0
+    for line in text.splitlines():
+        folded = line.casefold()
+        count = sum(term in folded for term in terms)
+        if count > best_count:
+            best_line, best_count = line, count
+            if count == len(terms):
+                break
+    clean = " ".join(best_line.split())
+    if len(clean) <= 128:
+        return clean
+    folded = clean.casefold()
+    match = min((folded.find(term) for term in terms if term in folded), default=0)
+    offset = max(0, min(match - 35, len(clean) - 112))
+    return ("…" if offset else "") + clean[offset:offset + 112] + ("…" if offset + 112 < len(clean) else "")
+
+
+def search_vault(root, query):
+    query = " ".join(query.casefold().split())
+    if not query:
+        return {"ok": True, "results": [], "more": False}
+    terms = list(dict.fromkeys(query.split()))
+    names, content_candidates = [], []
+    for directory, folders, files in os.walk(root):
+        folders[:] = [name for name in folders if not name.startswith(".")]
+        for filename in files:
+            path = Path(directory) / filename
+            suffix = path.suffix.lower()
+            if filename.startswith(".") or suffix not in ATTACHMENT_TYPES | {".md"} or path.is_symlink():
+                continue
+            relative = path.relative_to(root).as_posix()
+            title = path.stem if suffix == ".md" else path.name
+            result = {"relative": relative, "title": title, "kind": "note" if suffix == ".md" else "attachment"}
+            folded_title = title.casefold()
+            folded_path = relative.casefold()
+            missing = [term for term in terms if term not in folded_path]
+            if not missing:
+                rank = 0 if folded_title == query else 1 if folded_title.startswith(query) else (
+                    2 if all(term in folded_title for term in terms) else 3
+                )
+                names.append((rank, folded_title, folded_path, result))
+            elif suffix == ".md":
+                content_candidates.append((folded_path, path, result, missing))
+
+    names.sort(key=lambda item: (item[0], item[1], item[2], item[3]["relative"]))
+    results = [item[3] for item in names[:SEARCH_LIMIT + 1]]
+    if len(results) <= SEARCH_LIMIT:
+        for _, path, result, missing in sorted(content_candidates, key=lambda item: (item[0], item[2]["relative"])):
+            try:
+                if not path.resolve().is_relative_to(root):
+                    continue
+                text = note_bytes(path).decode("utf-8-sig")
+            except (OSError, ValueError, RuntimeError):
+                continue
+            folded = text.casefold()
+            if all(term in folded for term in missing):
+                result["snippet"] = search_excerpt(text, missing)
+                results.append(result)
+                if len(results) > SEARCH_LIMIT:
+                    break
+    return {"ok": True, "results": results[:SEARCH_LIMIT], "more": len(results) > SEARCH_LIMIT}
+
+
 def revision(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -269,6 +336,8 @@ def command(args):
     root = Path(vault).resolve()
     if not root.is_dir():
         raise ValueError("Set your Obsidian vault folder in the Dashboard settings.")
+    if operation == "search":
+        return search_vault(root, extra[0])
     path = within_vault(root, relative)
     if operation == "list":
         offset = max(0, int(extra[0])) * PAGE_SIZE if extra else 0
