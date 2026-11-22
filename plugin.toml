@@ -69,7 +69,7 @@ extensions = [".json"]
 key       = "vault_path"
 type      = "string"
 label_key = "settings.vault_path.label"
-default   = "~/Documents/NOTES/NOTES"
+default   = ""
 
 # Headless service: gathers data and handles `noctalia msg plugin ... toggle`.
 [[service]]

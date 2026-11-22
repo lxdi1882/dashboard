@@ -2950,7 +2950,7 @@ function update()
   elseif maximizedCard == "system" then
     body = systemDetails(width, height)
   elseif maximizedCard == "notes" then
-    body = Notes.details(width, sectionTitle("note", "Notes", nil, nil, "notes"))
+    body = Notes.details(width, sectionTitle("note", "Notes", nil, Notes.tools(), "notes"))
   elseif maximizedCard == "github" then
     body = githubDetails(width, height)
   else
