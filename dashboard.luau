@@ -57,24 +57,40 @@ noctalia.state.watch("gh_done", function(_) ghLoading = false end)
 ------------------------------------------------------------------ actions
 
 -- Animate from the current opacity so an interrupted fade can reverse smoothly.
-local ANIM_MS = 150
+local ANIM_MS = 170
+local motionSpeed = noctalia.getSetting("shell.animation.speed")
+local motionScale = 1
+if noctalia.getSetting("shell.animation.enabled") == false then
+  motionScale = 0
+elseif type(motionSpeed) == "number" and motionSpeed > 0 then
+  motionScale = 1 / motionSpeed
+end
+
+local function easeOut(elapsed, duration)
+  if duration <= 0 or elapsed >= duration then return 1 end
+  local t = math.clamp(elapsed / duration, 0, 1)
+  return 1 - (1 - t) ^ 3
+end
+
+local viewMotion
+local function animateView(distance, fade)
+  if motionScale > 0 then
+    viewMotion = { start = noctalia.nowMs(), distance = distance, fade = fade }
+    layer.setNeedsFrameTick(true)
+  end
+end
 local animStart = noctalia.nowMs()
 local animFrom = 0
 local animStarted = false
 local closeToken = 0
 local layoutCache = nil
-layer.setNeedsFrameTick(true)
+if motionScale > 0 then layer.setNeedsFrameTick(true) end
 
 local function animProgress()
   local target = closeToken == 0 and 1 or 0
-  local duration = ANIM_MS * math.abs(target - animFrom)
-  if duration == 0 then
-    return target
-  end
+  local duration = ANIM_MS * motionScale * math.abs(target - animFrom)
   local elapsed = animStarted and (noctalia.nowMs() - animStart) or 0
-  local t = math.min(1, math.max(0, elapsed / duration))
-  local eased = 1 - (1 - t) ^ 3
-  return animFrom + (target - animFrom) * eased
+  return animFrom + (target - animFrom) * easeOut(elapsed, duration)
 end
 
 local function closeDash()
@@ -171,6 +187,8 @@ local ghRepos = noctalia.state.get("gh_repos")
 noctalia.state.watch("gh_repos", function(v) ghRepos = v end)
 
 local function maximize(id)
+  if maximizedCard == id then return end
+  animateView(id == nil and -8 or 10, 0.34)
   maximizedCard = id
   screenHover = nil
   if id == "github" then
@@ -619,8 +637,11 @@ local function githubCommitsCard(width, user, tabbed)
       return ui.button({
         text = text, controlSize = "sm", variant = githubFeed == id and "primary" or "ghost",
         onClick = function()
-          githubFeed = id
-          update()
+          if githubFeed ~= id then
+            githubFeed = id
+            animateView(3, 0.15)
+            update()
+          end
         end,
       })
     end
@@ -783,14 +804,9 @@ local highlight = { fraction = 0, from = 0, target = 0, started = 0 }
 local HIGHLIGHT_ANIM_MS = 160
 
 local function stepHighlight()
-  local duration = HIGHLIGHT_ANIM_MS * math.abs(highlight.target - highlight.from)
-  local elapsed = noctalia.nowMs() - highlight.started
-  if elapsed >= duration then
-    highlight.fraction = highlight.target
-  else
-    local t = math.clamp(elapsed / duration, 0, 1)
-    highlight.fraction = highlight.from + (highlight.target - highlight.from) * (1 - (1 - t) ^ 3)
-  end
+  local duration = HIGHLIGHT_ANIM_MS * motionScale * math.abs(highlight.target - highlight.from)
+  local progress = easeOut(noctalia.nowMs() - highlight.started, duration)
+  highlight.fraction = highlight.from + (highlight.target - highlight.from) * progress
   return highlight.fraction ~= highlight.target
 end
 
@@ -804,6 +820,7 @@ local screenSite = nil
 local screenSiteDay = nil
 
 local function openScreenSite(domain)
+  if screenSite ~= domain then animateView(3, 0.15) end
   screenSite = domain
   screenSiteDay = nil
   update()
@@ -950,6 +967,7 @@ local function rangeToggle()
       radius = 9,
       fill = active and "primary" or "surface_container_high/0",
       onClick = function()
+        if screenRange ~= r.k and maximizedCard == "screen" then animateView(3, 0.15) end
         screenRange = r.k
         screenDay = nil
         screenSel = nil
@@ -1054,6 +1072,7 @@ local function screenCard(innerW)
         variant = "ghost",
         controlSize = "sm",
         onClick = function()
+          if screenFocus then animateView(-3, 0.15) end
           screenDay = nil
           screenSel = nil
           screenHover = nil
@@ -1187,6 +1206,7 @@ local function screenCard(innerW)
       for i, b in ipairs(bars) do
         local function selectBar()
           if not hourly then
+            if screenFocus then animateView(3, 0.15) end
             screenHover = nil
             screenDay = b.key
             screenSel = nil
@@ -1338,7 +1358,7 @@ local function toggleHighlight(id)
   highlight.from = highlight.fraction
   highlight.target = 1 - highlight.target
   highlight.started = noctalia.nowMs()
-  layer.setNeedsFrameTick(true)
+  if stepHighlight() then layer.setNeedsFrameTick(true) end
   update()
 end
 
@@ -1583,8 +1603,11 @@ local function screenTab(id, text, active)
   return ui.button({
     key = "screen-tab-" .. id, text = text, controlSize = "sm", variant = active and "primary" or "ghost",
     onClick = function()
-      screenDetailsTab = id
-      openScreenSite(nil)
+      if screenDetailsTab ~= id then
+        screenDetailsTab = id
+        animateView(3, 0.15)
+        openScreenSite(nil)
+      end
     end,
   })
 end
@@ -2080,6 +2103,16 @@ end
 
 local function renderLayout(anim)
   local c = layoutCache
+  local shift, fade = 0, 1
+  if viewMotion ~= nil then
+    local remaining = 1 - easeOut(noctalia.nowMs() - viewMotion.start, 165 * motionScale)
+    shift = viewMotion.distance * remaining
+    fade = 1 - viewMotion.fade * remaining
+    if remaining == 0 then viewMotion = nil end
+  end
+  local viewport = ui.column({ key = "dashboard-viewport", height = c.bodyHeight, clip = true }, {
+    ui.column({ flexGrow = 1, translateY = shift, opacity = fade }, { c.kids[3] }),
+  })
   layer.render(ui.column({
     fill = string.format("scrim/%.2f", 0.55 * anim),
     flexGrow = 1,
@@ -2089,6 +2122,8 @@ local function renderLayout(anim)
   }, {
     ui.column({
       opacity = anim,
+      translateY = 10 * (1 - anim),
+      scale = 0.992 + 0.008 * anim,
       width = c.w,
       height = c.h,
       fill = "surface",
@@ -2098,7 +2133,7 @@ local function renderLayout(anim)
       border = "outline_variant",
       borderWidth = 1,
       onClick = function() end,
-    }, c.kids),
+    }, { c.kids[1], c.kids[2], viewport, c.kids[4] }),
   }))
 end
 
@@ -2339,7 +2374,9 @@ function update()
     body,
     ui.column({ height = 32 }, { footer() }),
   }
-  layoutCache = { w = cardW, h = cardH, pad = pad, gap = colGap, kids = kids, screenBody = screenBody }
+  layoutCache = {
+    w = cardW, h = cardH, pad = pad, gap = colGap, bodyHeight = height, kids = kids, screenBody = screenBody,
+  }
   renderLayout(animProgress())
 end
 
@@ -2360,7 +2397,7 @@ function onFrameTick(_deltaMs)
     layoutCache.kids[3] = layoutCache.screenBody()
   end
   renderLayout(anim)
-  if closeToken == 0 and anim >= 1 and not revealing then
+  if closeToken == 0 and anim >= 1 and not revealing and viewMotion == nil then
     layer.setNeedsFrameTick(false)
   end
 end
