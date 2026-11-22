@@ -258,28 +258,6 @@ local function stat(value, caption)
   })
 end
 
-local function meter(name, pct)
-  pct = math.max(0, math.min(100, pct or 0))
-  local fill = "primary"
-  if pct >= 90 then
-    fill = "error"
-  elseif pct >= 70 then
-    fill = "tertiary"
-  end
-  return ui.row({ gap = 10, align = "center" }, {
-    ui.label({ text = name, fontSize = 13, color = "on_surface_variant", minWidth = 44 }),
-    ui.progress({
-      progress = pct / 100,
-      fill = fill,
-      track = "surface_container_high",
-      radius = 4,
-      height = 8,
-      flexGrow = 1,
-    }),
-    ui.label({ text = string.format("%d%%", math.floor(pct + 0.5)), fontSize = 13, color = "on_surface", minWidth = 40 }),
-  })
-end
-
 ------------------------------------------------------------------ GitHub graph + hover details
 
 local function levelColor(l, mode, dark)
@@ -1902,22 +1880,93 @@ local function readSystemStats()
   return stats
 end
 
-local function systemCard(showGovernor)
+local function formatMemory(bytes)
+  if bytes >= 1024 ^ 3 then return string.format("%.1f GiB", bytes / 1024 ^ 3) end
+  return string.format("%.0f MiB", bytes / 1024 ^ 2)
+end
+
+local function systemUsageBar(percent, color)
+  return ui.progress({
+    progress = math.clamp(percent / 100, 0, 1),
+    fill = percent >= 90 and "error" or color,
+    track = "on_surface/0.12", height = 4, radius = 2,
+  })
+end
+
+local function systemMetric(name, glyph, percent, color, width, tight)
+  return ui.column({
+    key = "system-summary-" .. name, width = width, padding = tight and 0 or 8,
+    gap = 3, radius = 10, fill = tight and "surface/0" or "surface_container_high/0.65", clip = true,
+  }, {
+    ui.row({ gap = 5, height = 14, align = "center" }, {
+      ui.glyph({ name = glyph, size = 13, color = color }),
+      ui.label({ text = name, fontSize = 11, height = 14, baseline = "inkCentered", color = "on_surface_variant", maxLines = 1 }),
+    }),
+    ui.label({
+      text = string.format("%.0f%%", percent), height = tight and 23 or 27,
+      fontSize = tight and 20 or 23, fontWeight = "bold", baseline = "inkCentered", color = "on_surface",
+    }),
+    systemUsageBar(percent, color),
+  })
+end
+
+local function systemCard(width, height)
   local stats = readSystemStats()
   local rows = { sectionTitle("cpu", "System", nil, nil, "system") }
+  local tight = height < 145
+  local padH, padV, gap = 10, tight and 8 or 10, tight and 5 or 8
+  local props = { flexGrow = 1, padding = 0, paddingH = padH, paddingV = padV, gap = gap, clip = true }
   if stats == nil then
-    table.insert(rows, monitorMessage())
-  else
-    table.insert(rows, meter("CPU", stats.cpu.usagePercent))
-    table.insert(rows, meter("RAM", stats.ram.usagePercent))
-    local storage = systemDisk()
-    if storage ~= nil then table.insert(rows, meter("Disk", storage.usagePercent)) end
+    table.insert(rows, ui.label({
+      text = "System monitor is off", height = 20, fontSize = 12, color = "on_surface_variant", maxLines = 1,
+    }))
+    return card(props, rows)
   end
-  if showGovernor then
-    local governor = governorButton(false)
-    if governor ~= nil then table.insert(rows, governor) end
+
+  local storage = (width >= 338 or height >= 163) and systemDisk() or nil
+  local inlineDisk = storage ~= nil and width >= 338
+  local count = inlineDisk and 3 or 2
+  local metricGap = 8
+  local metricWidth = math.floor((width - padH * 2 - (count - 1) * metricGap) / count)
+  local metrics = {
+    systemMetric("CPU", "cpu", stats.cpu.usagePercent, "primary", metricWidth, tight),
+    systemMetric("RAM", "device-desktop", stats.ram.usagePercent, "tertiary", metricWidth, tight),
+  }
+  if inlineDisk then
+    table.insert(metrics, systemMetric("Disk", "device-floppy", storage.usagePercent, "secondary", metricWidth, tight))
   end
-  return card({ flexGrow = 1, padding = 10, gap = 7 }, rows)
+  table.insert(rows, ui.row({ key = "system-summary-metrics", gap = metricGap }, metrics))
+
+  if storage ~= nil and not inlineDisk then
+    local diskLabel = "System disk"
+    if height >= 182 and storage.availableBytes ~= nil then
+      diskLabel = formatMemory(storage.availableBytes) .. " free"
+    end
+    table.insert(rows, ui.column({ key = "system-summary-disk", gap = 4 }, {
+      ui.row({ height = 16, gap = 6, align = "center" }, {
+        ui.glyph({ name = "device-floppy", size = 13, color = "secondary" }),
+        ui.label({ text = diskLabel, fontSize = 11, color = "on_surface_variant", flexGrow = 1, maxLines = 1 }),
+        ui.label({ text = string.format("%.0f%% used", storage.usagePercent), fontSize = 11, color = "on_surface" }),
+      }),
+      systemUsageBar(storage.usagePercent, "secondary"),
+    }))
+  end
+
+  if height >= 199 and stats.cpu.tempC ~= nil then
+    local detail = string.format("%.0f°C CPU", stats.cpu.tempC)
+    if stats.loadAvg and stats.loadAvg[1] ~= nil then
+      detail = detail .. string.format(" · Load %.2f", stats.loadAvg[1])
+    end
+    table.insert(rows, ui.label({
+      key = "system-summary-thermal", text = detail, height = 16,
+      fontSize = 11, baseline = "inkCentered", color = "on_surface_variant", maxLines = 1,
+    }))
+  end
+  if height >= 238 then
+    local governor = governorButton(width < 240)
+    if governor ~= nil then table.insert(rows, ui.row({ justify = "start" }, { governor })) end
+  end
+  return card(props, rows)
 end
 
 local systemView
@@ -1957,11 +2006,6 @@ local function updateProcessList()
     end
   end
   return view
-end
-
-local function formatMemory(bytes)
-  if bytes >= 1024 ^ 3 then return string.format("%.1f GiB", bytes / 1024 ^ 3) end
-  return string.format("%.0f MiB", bytes / 1024 ^ 2)
 end
 
 local systemPlots = {}
@@ -2746,12 +2790,7 @@ local function gridCard(id, w, h)
   elseif id == "calendar" then
     return cachedAgendaCard(w, h)
   end
-  if w < 210 or h < 151 then
-    local stats = readSystemStats()
-    local detail = stats and string.format("CPU %.0f%% · RAM %.0f%%", stats.cpu.usagePercent, stats.ram.usagePercent) or "System monitor is off"
-    return summaryCard(id, detail)
-  end
-  return systemCard(w >= 240 and h >= 270)
+  return systemCard(w, h)
 end
 
 local function launcher(placed, width)
