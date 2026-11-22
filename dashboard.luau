@@ -2048,52 +2048,23 @@ local function nextUpPreview(foreground, secondary, width)
   })
 end
 
-local function profileBanner(width, height, monitor, stacked)
-  local wallpaper = monitor and noctalia.wallpaperPath(monitor)
-  local hasWallpaper = type(wallpaper) == "string" and wallpaper ~= ""
-  local radius = 17
-  local foreground = hasWallpaper and "#ffffff" or "on_surface"
-  local secondary = hasWallpaper and "#e3e7ef" or "on_surface_variant"
-  local border = hasWallpaper and "#ffffff66" or "outline_variant"
+local function profileIdentity(size, foreground, secondary, border, width)
   local stats = "Up " .. fmtUptime(uptimeSec)
   if screen ~= nil and screen.ok then stats = stats .. " · " .. fmtDur(screen.sec) .. " screen time" end
-  local identity = ui.row({ gap = 10, align = "center", flexGrow = stacked and 0 or 1 }, {
-    avatarNode(stacked and 44 or (height - 20), border),
+  return ui.row({
+    key = "profile-identity", width = width, flexGrow = width == nil and 1 or 0,
+    gap = 10, align = "center", clip = true,
+  }, {
+    avatarNode(size, border),
     ui.column({ gap = 2, flexGrow = 1, justify = "center", clip = true }, {
       ui.label({ text = greeting() .. ",", fontSize = 11, color = secondary, maxLines = 1 }),
       ui.label({
-        text = profile and profile.name or "", fontSize = stacked and 20 or 23,
+        text = profile and profile.name or "", fontSize = size >= 50 and 23 or 20,
         fontWeight = "bold", color = foreground, maxLines = 1,
       }),
       ui.label({ key = "profile-stats", text = stats, fontSize = 11, color = secondary, maxLines = 1 }),
     }),
   })
-  local preview = nextUpPreview(foreground, secondary, stacked and math.max(1, width - 24) or math.floor(width * 0.45))
-  local content
-  if stacked then
-    content = ui.column({
-      key = "profile-content", height = height, translateY = hasWallpaper and -height or 0,
-      paddingH = 12, gap = 5, justify = "center",
-    }, { identity, ui.box({ height = 1, fill = border }), preview })
-  else
-    content = ui.row({
-      key = "profile-content", height = height, translateY = hasWallpaper and -height or 0,
-      paddingH = 12, gap = 12, align = "center",
-    }, { identity, ui.box({ width = 1, height = 42, fill = border }), preview })
-  end
-
-  local layers = {}
-  if hasWallpaper then
-    table.insert(layers, ui.image({
-      key = "profile-wallpaper", path = wallpaper, width = width, height = height,
-      fit = "cover", radius = radius, opacity = 0.38,
-    }))
-  end
-  table.insert(layers, content)
-  return ui.column({
-    key = "profile-banner", width = width, height = height, radius = radius, clip = true,
-    fill = hasWallpaper and "#10141b" or "surface_container",
-  }, layers)
 end
 
 -- WMO weather codes used in the shell's Open-Meteo cache.
@@ -2119,74 +2090,115 @@ local weatherStyles = {
   storm = { "cloud-storm", "Thunderstorms" },
 }
 
-local function currentWeather()
+local function currentWeather(foreground, secondary, accent, detailed)
   local style = weatherStyles[weatherConditions[weather.code]]
   local glyph = style and (not weather.day and style[3] or style[1]) or "cloud"
   local readings = {
     ui.label({
       key = "weather-temperature", text = weather.temperature .. "°" .. weather.unit,
-      fontSize = 25, fontWeight = "bold", color = "on_surface", maxLines = 1,
+      fontSize = detailed and 22 or 17, fontWeight = "bold", color = foreground, maxLines = 1,
     }),
   }
-  if style ~= nil then
-    local detail = style[2]
+  if detailed then
+    local detail = style and style[2]
     if weather.low ~= nil and weather.high ~= nil then
-      detail = detail .. " · " .. weather.low .. "° / " .. weather.high .. "°"
+      local range = weather.low .. "° / " .. weather.high .. "°"
+      detail = detail and (detail .. " · " .. range) or range
     end
-    table.insert(readings, ui.label({
-      key = "weather-conditions", text = detail, fontSize = 11, color = "on_surface", maxLines = 1,
-    }))
+    if detail ~= nil then
+      table.insert(readings, ui.label({
+        key = "weather-conditions", text = detail, fontSize = 11, color = secondary, maxLines = 1,
+      }))
+    end
+    if weather.city ~= nil then
+      table.insert(readings, ui.label({
+        key = "weather-city", text = weather.city, fontSize = 11, color = secondary, maxLines = 1,
+      }))
+    end
   end
-  if weather.city ~= nil then
-    table.insert(readings, ui.label({
-      key = "weather-city", text = weather.city, fontSize = 11, color = "on_surface_variant", maxLines = 1,
-    }))
-  end
-  return ui.row({ key = "header-weather", width = 202, gap = 9, align = "center" }, {
-    ui.glyph({ name = glyph, size = 38, color = "primary" }),
+  return ui.row({ key = "header-weather", width = detailed and 190 or 88, gap = 7, align = "center" }, {
+    ui.glyph({ name = glyph, size = detailed and 30 or 22, color = accent }),
     ui.column({ flexGrow = 1, gap = 1, justify = "center", clip = true }, readings),
   })
 end
 
 local function header(width, height, monitor, stacked)
-  local showDate = width >= 440
-  local showWeather = weather ~= nil and width >= 960
-  local reserve = showWeather and 440 or (showDate and 176 or 120)
-  local bannerWidth = math.max(1, math.min(680, width - reserve))
-  local compact = width < 630
-  local kids = { profileBanner(bannerWidth, height, monitor, stacked) }
-  table.insert(kids, ui.spacer({ flexGrow = 1 }))
+  local wallpaper = monitor and noctalia.wallpaperPath(monitor)
+  local hasWallpaper = type(wallpaper) == "string" and wallpaper ~= ""
+  local radius, padding = 17, 14
+  local foreground = hasWallpaper and "#ffffff" or "on_surface"
+  local secondary = hasWallpaper and "#d4d9e3" or "on_surface_variant"
+  local accent = hasWallpaper and "#e7ebf2" or "primary"
+  local border = hasWallpaper and "#ffffff40" or "outline_variant"
+  local gap = stacked and 8 or math.clamp(math.floor(width / 48), 14, 24)
+
+  local showWeather = weather ~= nil and width >= 550
+  local detailed = width >= 960
+  local clockWidth = stacked and 92 or 123
+  local showDate = width >= 390
   local clock = {
     ui.label({
-      text = os.date("%H:%M"), fontSize = compact and 30 or 40, fontWeight = "bold",
-      color = "primary", textAlign = "right",
+      key = "header-time", text = os.date("%H:%M"), fontSize = stacked and 28 or 36, fontWeight = "bold",
+      color = foreground, textAlign = "right",
     }),
   }
   if showDate then
     table.insert(clock, ui.label({
-      text = os.date("%A, %B %d"), fontSize = compact and 11 or 13,
-      color = "on_surface_variant", textAlign = "right", maxLines = 1, maxWidth = 132,
+      text = os.date(stacked and "%a, %b %d" or "%A, %B %d"), fontSize = stacked and 10 or 11,
+      color = secondary, textAlign = "right", maxLines = 1, maxWidth = clockWidth,
     }))
   end
-  local clockColumn = ui.column({
-    width = showWeather and 132 or nil, gap = 2, align = "end", justify = "center",
-  }, clock)
-  if showWeather then
-    table.insert(kids, ui.row({
-      key = "weather-clock", height = height, paddingH = 12, gap = 12, align = "center",
-      radius = 17, fill = "surface_container",
+  local clockColumn = ui.column({ width = clockWidth, gap = 2, align = "end", justify = "center" }, clock)
+  local closeButton = ui.button({
+    key = "close-dashboard", width = 32, glyph = "x", variant = "ghost",
+    controlSize = "sm", tooltip = "Close", onClick = closeDash,
+  })
+
+  local identityWidth = not stacked and math.floor((width - 2 * padding) * 0.32) or nil
+  local identity = profileIdentity(stacked and 44 or (height - 24), foreground, secondary, border, identityWidth)
+  local weatherWidth = showWeather and ((detailed and 190 or 88) + gap) or 0
+  local available = width - 2 * padding
+  local previewWidth = stacked and available or (available - identityWidth - clockWidth - 32 - weatherWidth - 1 - 4 * gap)
+  local preview = nextUpPreview(foreground, secondary, math.max(1, previewWidth))
+  local row = { identity }
+  if not stacked then
+    table.insert(row, ui.box({ width = 1, height = 36, fill = border }))
+    table.insert(row, preview)
+  end
+  if showWeather then table.insert(row, currentWeather(foreground, secondary, accent, detailed)) end
+  table.insert(row, clockColumn)
+  table.insert(row, closeButton)
+
+  local layers = {}
+  local lift = hasWallpaper and -2 * height or 0
+  if hasWallpaper then
+    table.insert(layers, ui.image({
+      key = "profile-wallpaper", path = wallpaper, width = width, height = height,
+      fit = "cover", radius = radius, opacity = 0.38,
+    }))
+    table.insert(layers, ui.image({
+      key = "header-fade", path = "assets/header-fade.png", width = width, height = height,
+      fit = "stretch", radius = radius, translateY = -height,
+    }))
+  end
+
+  if stacked then
+    table.insert(layers, ui.column({
+      key = "profile-content", height = height, translateY = lift, paddingH = padding, gap = 5, justify = "center",
     }, {
-      currentWeather(),
-      ui.box({ width = 1, height = 44, fill = "outline_variant" }),
-      clockColumn,
+      ui.row({ height = 52, gap = gap, align = "center" }, row),
+      ui.box({ height = 1, fill = border }),
+      preview,
     }))
   else
-    table.insert(kids, clockColumn)
+    table.insert(layers, ui.row({
+      key = "profile-content", height = height, translateY = lift, paddingH = padding, gap = gap, align = "center",
+    }, row))
   end
-  table.insert(kids, ui.button({
-    key = "close-dashboard", glyph = "x", variant = "ghost", controlSize = "sm", tooltip = "Close", onClick = closeDash,
-  }))
-  return ui.row({ gap = compact and 8 or 14, align = "center" }, kids)
+  return ui.column({
+    key = "dashboard-header", width = width, height = height, radius = radius, clip = true,
+    fill = hasWallpaper and "#10141b" or "surface_container",
+  }, layers)
 end
 
 local function footer()
