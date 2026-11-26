@@ -1279,7 +1279,7 @@ local function screenCard(innerW, chartOnly)
           n = n + 1
         end
       end
-      statLabel, statValue = "apps used", tostring(n)
+      statLabel, statValue = hourly and screen.hourlyMixed and "apps and sites" or "apps used", tostring(n)
       heroLabel = "total · " .. selectedBar.label
     end
     table.insert(rows, ui.row({ align = "end", gap = 8 }, {
@@ -1357,7 +1357,8 @@ local function screenCard(innerW, chartOnly)
     local list = {}
     otherSec = sums["_other"] or 0
     if selectedBar ~= nil then
-      listTitle = selectedBar.label .. " · apps used"
+      local mixed = hourly and screen.hourlyMixed or (not hourly and screen.mixed)
+      listTitle = selectedBar.label .. (mixed and " · apps and sites" or " · apps used")
     elseif detailDay ~= nil then
       listTitle = dayLabel .. (screen.mixed and " · apps and sites" or " · apps used")
     elseif range.k == "today" then
@@ -1366,7 +1367,7 @@ local function screenCard(innerW, chartOnly)
       listTitle = (screen.mixed and "Apps and sites · " or "Apps used · ") .. string.lower(range.label)
         .. (screenFocus and "" or " (tap a bar to pick a day)")
     end
-    local listApps = selectedBar ~= nil and hourlyApps or dailyApps
+    local listApps = selectedBar ~= nil and hourly and hourlyApps or dailyApps
     for _, a in ipairs(listApps) do
       if (sums[a.id] or 0) > 0 then
         table.insert(list, { a = a, sec = sums[a.id] })

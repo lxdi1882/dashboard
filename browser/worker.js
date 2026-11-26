@@ -32,7 +32,10 @@ function trim(state, now) {
   oldest.setDate(oldest.getDate() - 13);
   const cutoff = localDate(oldest.getTime());
   for (const day of Object.keys(state.days)) {
-    if (day < cutoff) delete state.days[day];
+    if (day < cutoff) {
+      delete state.days[day];
+      if (state.hours) delete state.hours[day];
+    }
   }
   for (const [domain, recheck] of Object.entries(state.icons ?? {})) {
     if (recheck <= now) delete state.icons[domain];
@@ -45,15 +48,21 @@ function finishSample(state, now) {
   const end = Math.min(now, since + maxSample);
   let cursor = since;
   while (cursor < end) {
-    const midnight = new Date(cursor);
-    midnight.setHours(24, 0, 0, 0);
-    const stop = Math.min(end, midnight.getTime());
+    const local = new Date(cursor);
+    const intoHour = local.getMinutes() * 60_000 + local.getSeconds() * 1000 + local.getMilliseconds();
+    const stop = Math.min(end, cursor + 3_600_000 - intoHour);
     const day = localDate(cursor);
     const sites = state.days[day] ??= {};
     const ownTime = Object.hasOwn(sites, domain) ? sites[domain] : 0;
     sites[domain] = ownTime + stop - cursor;
+    const hourlySites = (state.hours ??= {})[day] ??= Object.create(null);
+    if (!Object.hasOwn(hourlySites, domain)) hourlySites[domain] = Array(24).fill(0);
+    hourlySites[domain][local.getHours()] += stop - cursor;
     if (Object.keys(sites).length > 128) {
       state.days[day] = Object.fromEntries(Object.entries(sites).sort((a, b) => b[1] - a[1]).slice(0, 128));
+      for (const name of Object.keys(hourlySites)) {
+        if (!Object.hasOwn(state.days[day], name)) delete hourlySites[name];
+      }
     }
     cursor = stop;
   }
@@ -101,7 +110,12 @@ async function exportTotals(state, { force = false, page = null, clear = false }
   const now = Date.now();
   if (!force && now < nextExport) return false;
   nextExport = now + exportInterval;
-  const message = { profile: state.profile, days: state.days, clearIcons: clear };
+  // Bound the native message size even with long hostnames and 14 days of data.
+  const hours = Object.fromEntries(Object.entries(state.hours ?? {}).map(([day, sites]) => [
+    day, Object.fromEntries(Object.entries(sites)
+      .sort(([a], [b]) => (state.days[day]?.[b] ?? 0) - (state.days[day]?.[a] ?? 0)).slice(0, 64)),
+  ]));
+  const message = { profile: state.profile, days: state.days, hours, clearIcons: clear };
   try {
     if (page?.hasIcon && !(Object.hasOwn(state.icons ?? {}, page.domain))
         && (await chrome.permissions.contains({ permissions: ["favicon"] }))) {
@@ -161,6 +175,7 @@ async function status(action) {
   } else if (action === "clear") {
     const now = Date.now();
     state.days = {};
+    state.hours = {};
     state.icons = {};
     if (state.active) state.active.since = now;
     await save(state);

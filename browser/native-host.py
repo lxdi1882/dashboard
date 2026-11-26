@@ -67,7 +67,7 @@ def save_icon(directory, icon):
         stale.unlink(missing_ok=True)
 
 
-def save_totals(message):
+def save_totals(message, browser):
     if not isinstance(message, dict):
         return False
     profile, days = message.get("profile"), message.get("days")
@@ -90,7 +90,26 @@ def save_totals(message):
                 clean[hostname] = ms
         totals[day] = dict(sorted(clean.items(), key=lambda item: -item[1])[:128])
 
+    hours = message.get("hours")
+    if isinstance(hours, dict):
+        hourly = {}
+        for day, sites in hours.items():
+            if day not in totals or not isinstance(sites, dict):
+                continue
+            hourly[day] = {
+                hostname: buckets
+                for hostname, buckets in sites.items()
+                if hostname in totals[day]
+                and isinstance(buckets, list)
+                and len(buckets) == 24
+                and all(type(ms) is int and 0 <= ms <= 86_400_000 for ms in buckets)
+                and 0 < sum(buckets) <= totals[day][hostname]
+            }
+        totals["_hours"] = hourly
+
     directory = xdg_dir("XDG_STATE_HOME", ".local/state") / "lat-dashboard/site-usage"
+    if browser == "vivaldi":
+        directory /= browser
     atomic_json(directory / f"{profile}.json", totals)
     icons = directory / "icons" / profile
     if message.get("clearIcons") is True:
@@ -104,7 +123,7 @@ def save_totals(message):
     return True
 
 
-def serve():
+def serve(browser):
     header = sys.stdin.buffer.read(4)
     if len(header) != 4:
         return
@@ -113,7 +132,7 @@ def serve():
         return
     try:
         message = json.loads(sys.stdin.buffer.read(length))
-        ok = save_totals(message)
+        ok = save_totals(message, browser)
     except (OSError, UnicodeError, ValueError):
         ok = False
     response = json.dumps({"ok": ok}).encode()
@@ -121,7 +140,13 @@ def serve():
     sys.stdout.buffer.flush()
 
 
-def install(browser_dir):
+def install(browser_dir, browser):
+    if browser == "vivaldi":
+        if browser_dir is None:
+            browser_dir = xdg_dir("XDG_CONFIG_HOME", ".config") / "vivaldi"
+        launcher = Path(__file__).resolve().with_name("vivaldi-host")
+    else:
+        launcher = Path(__file__).resolve()
     if browser_dir is None:
         vendor = xdg_dir("XDG_CONFIG_HOME", ".config") / "BraveSoftware"
         candidates = [path for path in vendor.glob("Brave-*") if path.is_dir()]
@@ -137,7 +162,7 @@ def install(browser_dir):
     atomic_json(target, {
         "name": HOST,
         "description": "Local Noctalia dashboard site usage",
-        "path": str(script),
+        "path": str(launcher),
         "type": "stdio",
         "allowed_origins": [f"chrome-extension://{extension_id}/"],
     })
@@ -145,9 +170,13 @@ def install(browser_dir):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--install":
-        parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("--install", nargs="?", type=Path, metavar="BRAVE_USER_DATA_DIR")
-        install(parser.parse_args().install)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--install", nargs="?", type=Path, const=True, metavar="USER_DATA_DIR")
+    parser.add_argument("--browser", choices=("brave", "vivaldi"), default="brave")
+    # Chromium supplies the caller origin as an argument when launching the host.
+    if "--install" in sys.argv[1:]:
+        args = parser.parse_args()
+        install(None if args.install is True else args.install, args.browser)
     else:
-        serve()
+        args, _ = parser.parse_known_args()
+        serve(args.browser)

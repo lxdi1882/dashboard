@@ -27,12 +27,12 @@ YOUR_USER ALL=(root) NOPASSWD: /usr/local/bin/set-governor
 
 Without this, the buttons show an error notification. The governor resets on reboot.
 
-## Brave site time (optional)
+## Brave and Vivaldi site time (optional)
 
-In Screen Time, websites appear alongside apps in daily and multi-day rankings. This breakdown subdivides Brave’s recorded time, so it keeps the overall Noctalia total consistent. Click a website in the maximized card to see its trend.
+In Screen Time, websites appear alongside apps in hourly, daily, and multi-day rankings. Each browser’s site time comes out of its own recorded app time. The same website appears as one entry across Brave and Vivaldi, including addresses with and without `www.`. Click a website in the maximized card to see its trend. If the extension is already loaded, reload it from the extensions page in each browser to start collecting hourly site totals. Earlier usage keeps its daily site breakdown.
 
-1. From this checkout, run `python3 browser/native-host.py --install`. If Brave uses a custom user data directory or you have multiple Brave editions, pass the directory after `--install`. In `brave://version`, it is the directory containing the profile listed under **Profile Path**.
-2. Open `brave://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `browser` directory in this checkout.
+1. From this checkout, run `python3 browser/native-host.py --install` for Brave or `python3 browser/native-host.py --browser vivaldi --install` for native Linux Vivaldi. For a custom user data directory, pass it after `--install`. It is the parent of **Profile Path** in the browser’s `chrome://version` page.
+2. Open `brave://extensions` or `vivaldi://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `browser` directory in this checkout.
 3. Open **Dashboard Site Time** from the extensions menu and click **Start tracking**. Accept the tab access prompt. Dashboard Site Time stays paused until you start it.
 
-The companion counts time on an HTTP(S) domain while Brave has focus and the screen is unlocked. It stores only domain totals locally, with no page paths, titles, or search terms. Private windows are excluded. The dashboard shows up to 14 days of totals. Use **Enable site icons** in the popup to show favicons cached by Brave. The dashboard uses a globe until Brave has supplied an icon. Use **Pause tracking** or **Clear site totals** from the extension popup. The dashboard refreshes the website breakdown along with its normal screen-time data.
+The companion counts time on an HTTP(S) domain while the browser has focus and the screen is unlocked. It stores only domain totals locally, with no page paths, titles, or search terms. Private windows are excluded. The dashboard shows up to 14 days of totals. Use **Enable site icons** in the popup to show cached favicons. The dashboard uses a globe until an icon is available. Use **Pause tracking** or **Clear site totals** from the extension popup. The dashboard refreshes the website breakdown along with its normal screen-time data.

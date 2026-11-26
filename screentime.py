@@ -26,9 +26,13 @@ NAME_FIELDS = ("app", "app_id", "appId", "name", "id", "class", "title")
 VALUE_FIELDS = ("seconds", "secs", "duration", "time", "ms")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HOUR_RE = re.compile(r"^\d{1,2}$")
-BRAVE_APP = re.compile(r"(?:^|[.])brave(?:$|[-.])")
+BROWSERS = {
+    "brave": ("Brave", re.compile(r"(?:^|[.])brave(?:$|[-.])")),
+    "vivaldi": ("Vivaldi", re.compile(r"(?:^|[.])vivaldi(?:$|[-.])")),
+}
 SITE_PREFIX = "site:"
-BRAVE_REMAINDER = "browser:brave-other"
+
+
 def classify(k):
     if isinstance(k, str):
         if k.startswith("H:"):
@@ -184,70 +188,97 @@ def site_label(domain):
 
 
 def load_sites(directory, dates):
-    """Read aggregate domain durations exported by the optional Brave companion."""
-    days = {day: {} for day, _ in dates}
-    profiles = []
+    """Read the browser exports separately and share metadata for matching sites."""
+    browser_days = {}
+    browser_hours = {}
+    icon_paths = {}
     directory = Path(directory)
-    for path in directory.glob("*.json"):
-        try:
-            profile = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(profile, dict):
-            continue
-        profiles.append(path.stem)
-        for day, by_domain in profile.items():
-            if day not in days or not isinstance(by_domain, dict):
+    loaded = False
+    for browser in BROWSERS:
+        source = directory if browser == "brave" else directory / browser
+        days = {day: {} for day, _ in dates}
+        for path in sorted(source.glob("*.json")):
+            try:
+                profile = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
                 continue
-            for domain, duration in by_domain.items():
-                if type(duration) is int and duration > 0 and re.fullmatch(r"[a-z0-9.-]{1,253}", domain):
+            if not isinstance(profile, dict):
+                continue
+            loaded = True
+            browser_days[browser] = days
+            for day, by_domain in profile.items():
+                if day not in days or not isinstance(by_domain, dict):
+                    continue
+                for hostname, duration in by_domain.items():
+                    if type(duration) is not int or duration <= 0 or not re.fullmatch(r"[a-z0-9.-]{1,253}", hostname):
+                        continue
+                    domain = re.sub(r"^www[0-9]*\.(?=.+\.)", "", hostname)
                     days[day][domain] = days[day].get(domain, 0) + duration
-    if not profiles:
-        return None, {}, None
+                    name = hashlib.sha256(hostname.encode("ascii")).hexdigest() + ".png"
+                    icon_paths.setdefault(domain, set()).add(source / "icons" / path.stem / name)
+            hourly = profile.get("_hours")
+            if not isinstance(hourly, dict):
+                continue
+            for day, by_domain in hourly.items():
+                if day not in days or not isinstance(by_domain, dict):
+                    continue
+                for hostname, buckets in by_domain.items():
+                    if not re.fullmatch(r"[a-z0-9.-]{1,253}", hostname) or not isinstance(buckets, list):
+                        continue
+                    domain = re.sub(r"^www[0-9]*\.(?=.+\.)", "", hostname)
+                    for hour, duration in enumerate(buckets[:24]):
+                        if type(duration) is int and 0 < duration <= 86_400_000:
+                            sites = browser_hours.setdefault(browser, {}).setdefault((day, hour), {})
+                            sites[domain] = sites.get(domain, 0) + duration
+    if not loaded:
+        return None, {}, {}, None
 
-    icons = {}
-
-    def icon_for(domain):
-        if domain not in icons:
-            name = hashlib.sha256(domain.encode("ascii")).hexdigest() + ".png"
-            paths = (directory / "icons" / profile / name for profile in profiles)
-            icons[domain] = next((str(path) for path in paths if path.is_file()), "")
-        return icons[domain]
+    days = {day: sum_usage(by_day[day] for by_day in browser_days.values()) for day, _ in dates}
 
     def trend_for(domain):
         return {
             "seconds": [days[day].get(domain, 0) // 1000 for day, _ in dates],
-            "icon": icon_for(domain),
+            "icon": next((str(path) for path in sorted(icon_paths.get(domain, ())) if path.is_file()), ""),
             "name": site_label(domain),
         }
 
     return {
         "calendar": [{"date": day, "recorded": bool(days[day])} for day, _ in dates],
         "trends": {},
-    }, days, trend_for
+    }, browser_days, browser_hours, trend_for
 
 
-def attribute_sites(apps, site_ms):
-    """Subdivide the Brave seconds already counted in the day total."""
-    brave = [app for app in apps if BRAVE_APP.search(app.lower())]
-    budget = sum(apps[app] for app in brave)
-    if budget <= 0:
-        return apps
-    total_ms = sum(site_ms.values())
-    credited = min(budget, total_ms // 1000)
-    result = {app: seconds for app, seconds in apps.items() if app not in brave}
-    if credited > 0:
-        # Cumulative rounding keeps the domain split exactly equal to the credited budget.
-        cumulative_ms = 0
-        allocated = 0
-        for domain, duration in sorted(site_ms.items()):
-            cumulative_ms += duration
-            target = cumulative_ms * credited // total_ms
-            if target > allocated:
-                result[SITE_PREFIX + domain] = target - allocated
-            allocated = target
-    if budget > credited:
-        result[BRAVE_REMAINDER] = budget - credited
+def attribute_sites(apps, browser_usage, bucket, *, daily=False):
+    """Subdivide each browser's own app time and combine matching site entries."""
+    result = apps
+    for browser, (_, pattern) in BROWSERS.items():
+        if browser not in browser_usage or bucket not in browser_usage[browser]:
+            continue
+        site_ms = browser_usage[browser][bucket]
+        browser_apps = [app for app in apps if pattern.search(app.lower())]
+        budget = sum(apps[app] for app in browser_apps)
+        total_ms = sum(site_ms.values())
+        credited = min(budget, total_ms // 1000)
+        # Keep the legacy Brave remainder label once an export exists.
+        if budget <= 0 or (credited <= 0 and not (daily and browser == "brave")):
+            continue
+        if result is apps:
+            result = apps.copy()
+        for app in browser_apps:
+            del result[app]
+        if credited > 0:
+            # Cumulative rounding keeps the split equal to the credited budget.
+            cumulative_ms = 0
+            allocated = 0
+            for domain, duration in sorted(site_ms.items()):
+                cumulative_ms += duration
+                target = cumulative_ms * credited // total_ms
+                if target > allocated:
+                    item = SITE_PREFIX + domain
+                    result[item] = result.get(item, 0) + target - allocated
+                allocated = target
+        if budget > credited:
+            result[f"browser:{browser}-other"] = budget - credited
     return result
 
 
@@ -297,20 +328,20 @@ def main():
     # anything above 48h of seconds in a single day must be milliseconds
     div = 1000 if max(a.total for a in accs.values()) > 172800 else 1
 
-    sites, site_days, trend_for = load_sites(sys.argv[3], dates) if len(sys.argv) > 3 else (None, {}, None)
+    sites, site_days, site_hours, trend_for = load_sites(sys.argv[3], dates) if len(sys.argv) > 3 else (None, {}, {}, None)
 
     def in_seconds(by):
         return {app: sec for app, duration in by.items() if (sec := int(duration / div)) > 0}
 
     raw_days = {day: in_seconds(accs[day].apps) if day in accs else {} for day, _ in dates}
-    daily = {day: attribute_sites(by, site_days.get(day, {})) if sites is not None else by
+    daily = {day: attribute_sites(by, site_days, day, daily=True)
              for day, by in raw_days.items()}
     mixed = any(daily[day] is not by for day, by in raw_days.items())
     ranked = rank_usage(sum_usage(daily.values()))
     raw_ranked = rank_usage(sum_usage(raw_days.values())) if mixed else ranked
     limit = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 12
-    top, hourly_top = ranked[:limit], raw_ranked[:limit]
-    top_set, hourly_set = set(top), set(hourly_top)
+    top = ranked[:limit]
+    top_set = set(top)
 
     def fold(by, keep):
         out = {}
@@ -321,24 +352,35 @@ def main():
 
     days = []
     hours = []
+    hourly_visible = {}
+    hourly_mixed = False
     for d, lab in dates:
         a = accs.get(d)
         day = {"d": d, "label": lab, "sec": int(a.total / div) if a else 0, "by": fold(daily[d], top_set)}
         if a is not None and a.hour_apps:
-            if d == dates[-1][0]:
-                for h in range(24):
-                    by = fold(in_seconds(a.hour_apps.get(h, {})), hourly_set)
+            day_hours = {}
+            for h in range(24):
+                raw_hour = in_seconds(a.hour_apps.get(h, {}))
+                attributed = attribute_sites(raw_hour, site_hours, (d, h))
+                hourly_mixed = hourly_mixed or attributed is not raw_hour
+                keep = set(rank_usage(attributed)[:limit])
+                by = fold(attributed, keep)
+                for item in keep:
+                    hourly_visible[item] = hourly_visible.get(item, 0) + by[item]
+                if d == dates[-1][0]:
                     hours.append({"sec": sum(by.values()), "by": by})
-            else:
-                # Send only recorded buckets. The dashboard fills the gaps with zeroes.
-                day["hours"] = {
-                    f"h{h}": by for h, apps in a.hour_apps.items()
-                    if 0 <= h < 24 and (by := fold(in_seconds(apps), hourly_set))
-                }
+                elif by:
+                    day_hours[f"h{h}"] = by
+            if d != dates[-1][0]:
+                day["hours"] = day_hours
         days.append(day)
 
+    hourly_top = rank_usage(hourly_visible)
     icons = desktop_icons() if top or hourly_top else {}
-    brave = next((app for app in raw_ranked if BRAVE_APP.search(app.lower())), "")
+    remainders = {}
+    for browser, (label, pattern) in BROWSERS.items():
+        app = next((app for app in raw_ranked if pattern.search(app.lower())), "")
+        remainders[f"browser:{browser}-other"] = (f"Other {label} time", icons.get(app.lower(), app))
 
     def metadata(item):
         if sites is not None and item.startswith(SITE_PREFIX):
@@ -347,8 +389,9 @@ def main():
                 sites["trends"][domain] = trend_for(domain)
             trend = sites["trends"][domain]
             return {"id": item, "name": trend["name"], "domain": domain, "icon": trend["icon"]}
-        if item == BRAVE_REMAINDER:
-            return {"id": item, "name": "Other Brave time", "icon": icons.get(brave.lower(), brave)}
+        if item in remainders:
+            name, icon = remainders[item]
+            return {"id": item, "name": name, "icon": icon}
         return {"id": item, "name": item, "icon": icons.get(item.lower(), "")}
 
     scopes, scope_metadata = {}, {}
@@ -394,8 +437,9 @@ def main():
         "ok": True,
         "sec": days[-1]["sec"],
         "apps": [metadata(item) for item in top],
+        "hourApps": [metadata(app) for app in hourly_top],
+        "hourlyMixed": hourly_mixed,
         **({
-            "hourApps": [metadata(app) for app in hourly_top],
             "mixed": True,
             "usageScopes": scopes,
             "usageApps": scope_metadata,
