@@ -2455,7 +2455,7 @@ local function nextUpPreview(foreground, secondary, width)
   local tooltip = showingTask and "Show next event" or "Show priority task"
   return ui.column({ key = "next-up", width = width, gap = 1, justify = "center", clip = true }, {
     ui.row({ gap = 5, align = "center" }, {
-      headerLabel({ text = showingTask and "Priority task" or "Next event", height = 14, fontSize = 11, color = secondary }),
+      headerLabel({ text = showingTask and "Priority task" or "Next event", height = 19, fontSize = 15, color = secondary }),
       ui.row({
         key = "next-up-swap", width = 24, height = 23, align = "center", justify = "center",
         tooltip = tooltip, onClick = function() chooseNextUp(mode) end,
@@ -2463,12 +2463,16 @@ local function nextUpPreview(foreground, secondary, width)
         ui.glyph({ name = "arrows-exchange", size = 15, color = secondary }),
       }),
     }),
-    headerLabel({ key = "next-up-title", text = title, height = 17, fontSize = 13, fontWeight = "bold", color = foreground }),
-    headerLabel({ key = "next-up-detail", text = detail or "", height = 14, fontSize = 11, color = secondary }),
+    headerLabel({ key = "next-up-title", text = title, height = 22, fontSize = 18, fontWeight = "bold", color = foreground }),
+    headerLabel({ key = "next-up-detail", text = detail or "", height = 18, fontSize = 14, color = secondary }),
   })
 end
 
 local function profileIdentity(size, foreground, secondary, border, width)
+  local stacked = width == nil
+  local detailSize = stacked and 14 or 16
+  local detailHeight = stacked and 16 or 20
+  local line = noctalia.state.get("profile_line") or (greeting() .. ",")
   local stats = "Up " .. fmtUptime(uptimeSec)
   if screen ~= nil and screen.ok then stats = stats .. " · " .. fmtDur(screen.sec) .. " screen time" end
   return ui.row({
@@ -2477,12 +2481,12 @@ local function profileIdentity(size, foreground, secondary, border, width)
   }, {
     avatarNode(size, border),
     ui.column({ gap = 1, flexGrow = 1, justify = "center", clip = true }, {
-      headerLabel({ text = greeting() .. ",", height = 13, fontSize = 11, color = secondary }),
+      headerLabel({ text = line, height = detailHeight, fontSize = detailSize, color = secondary }),
       headerLabel({
-        text = profile and profile.name or "", height = size >= 50 and 28 or 24,
-        fontSize = size >= 50 and 23 or 20, fontWeight = "bold", color = foreground,
+        text = profile and profile.name or "", height = stacked and 30 or 36,
+        fontSize = stacked and 26 or 30, fontWeight = "bold", color = foreground,
       }),
-      headerLabel({ key = "profile-stats", text = stats, height = 13, fontSize = 11, color = secondary }),
+      headerLabel({ key = "profile-stats", text = stats, height = detailHeight, fontSize = detailSize, color = secondary }),
     }),
   })
 end
@@ -2510,13 +2514,13 @@ local weatherStyles = {
   storm = { "cloud-storm", "Thunderstorms" },
 }
 
-local function currentWeather(foreground, secondary, accent, detailed)
+local function currentWeather(foreground, secondary, accent, detailed, width)
   local style = weatherStyles[weatherConditions[weather.code]]
   local glyph = style and (not weather.day and style[3] or style[1]) or "cloud"
   local readings = {
     headerLabel({
       key = "weather-temperature", text = weather.temperature .. "°" .. weather.unit,
-      height = detailed and 27 or 22, fontSize = detailed and 22 or 17, fontWeight = "bold", color = foreground,
+      height = detailed and 33 or 27, fontSize = detailed and 28 or 22, fontWeight = "bold", color = foreground,
     }),
   }
   if detailed then
@@ -2527,16 +2531,16 @@ local function currentWeather(foreground, secondary, accent, detailed)
     end
     if detail ~= nil then
       table.insert(readings, headerLabel({
-        key = "weather-conditions", text = detail, height = 14, fontSize = 11, color = secondary,
+        key = "weather-conditions", text = detail, height = 18, fontSize = 14, color = secondary,
       }))
     end
     if weather.city ~= nil then
       table.insert(readings, headerLabel({
-        key = "weather-city", text = weather.city, height = 14, fontSize = 11, color = secondary,
+        key = "weather-city", text = weather.city, height = 18, fontSize = 14, color = secondary,
       }))
     end
   end
-  return ui.row({ key = "header-weather", width = detailed and 190 or 88, gap = 7, align = "center" }, {
+  return ui.row({ key = "header-weather", width = width, gap = 7, align = "center" }, {
     ui.glyph({ name = glyph, size = detailed and 30 or 22, color = accent }),
     ui.column({ flexGrow = 1, gap = 1, justify = "center", clip = true }, readings),
   })
@@ -2548,7 +2552,7 @@ local function header(width, height, monitor, stacked)
   local radius = 17
   local paddingH = stacked and 12 or (width >= 960 and 20 or 16)
   local paddingV = height >= 124 and 14 or 12
-  if stacked then paddingV = height >= 164 and 12 or 8 end
+  if stacked then paddingV = height >= 172 and 12 or 8 end
   local foreground = hasWallpaper and "#ffffff" or "on_surface"
   local secondary = hasWallpaper and "#d4d9e3" or "on_surface_variant"
   local accent = hasWallpaper and "#e7ebf2" or "primary"
@@ -2557,18 +2561,18 @@ local function header(width, height, monitor, stacked)
 
   local showWeather = weather ~= nil and width >= 550
   local detailed = width >= 960
-  local clockWidth = stacked and 92 or 123
+  local clockWidth = stacked and 106 or (detailed and 174 or 140)
   local showDate = width >= 390
   local clock = {
     headerLabel({
-      key = "header-time", text = os.date("%H:%M"), height = stacked and 33 or 41,
-      fontSize = stacked and 28 or 36, fontWeight = "bold", color = foreground, textAlign = "right",
+      key = "header-time", text = os.date("%H:%M"), height = stacked and 39 or 49,
+      fontSize = stacked and 33 or 42, fontWeight = "bold", color = foreground, textAlign = "right",
     }),
   }
   if showDate then
     table.insert(clock, headerLabel({
-      key = "header-date", text = os.date(stacked and "%a, %b %d" or "%A, %B %d"),
-      height = 14, fontSize = stacked and 10 or 11, color = secondary, textAlign = "right", maxWidth = clockWidth,
+      key = "header-date", text = os.date(detailed and "%A, %B %d" or "%a, %b %d"),
+      height = 19, fontSize = stacked and 14 or 15, color = secondary, textAlign = "right", maxWidth = clockWidth,
     }))
   end
   local clockColumn = ui.column({ width = clockWidth, gap = 2, align = "end", justify = "center" }, clock)
@@ -2581,15 +2585,16 @@ local function header(width, height, monitor, stacked)
   local identityWidth = not stacked and math.floor(available * 0.32) or nil
   local avatarSize = stacked and (width < 390 and 64 or 72) or math.min(96, height - 2 * paddingV)
   local identity = profileIdentity(avatarSize, foreground, secondary, border, identityWidth)
-  local weatherWidth = showWeather and ((detailed and 190 or 88) + gap) or 0
-  local previewWidth = stacked and available or (available - identityWidth - clockWidth - 32 - weatherWidth - 1 - 4 * gap)
+  local weatherWidth = detailed and 208 or 100
+  local weatherSpace = showWeather and (weatherWidth + gap) or 0
+  local previewWidth = stacked and available or (available - identityWidth - clockWidth - 32 - weatherSpace - 1 - 4 * gap)
   local preview = nextUpPreview(foreground, secondary, math.max(1, previewWidth))
   local row = { identity }
   if not stacked then
     table.insert(row, ui.box({ width = 1, height = 36, fill = border }))
     table.insert(row, preview)
   end
-  if showWeather then table.insert(row, currentWeather(foreground, secondary, accent, detailed)) end
+  if showWeather then table.insert(row, currentWeather(foreground, secondary, accent, detailed, weatherWidth)) end
   table.insert(row, clockColumn)
   table.insert(row, closeButton)
 
@@ -2936,7 +2941,7 @@ function update()
   local width = cardW - pad * 2
   local stackProfile = width < 690
   local headerHeight = short and 108 or 124
-  if stackProfile then headerHeight = cardH < 500 and 156 or 164 end
+  if stackProfile then headerHeight = cardH < 500 and 164 or 172 end
   local height = math.max(0, cardH - 2 * pad - 3 * colGap - headerHeight - 36)
   local monitor = lastOutputName or (g and g.name) or "default"
 

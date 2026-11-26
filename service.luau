@@ -11,6 +11,15 @@ local tick = 0
 local lastGithub = 0
 local visible = false
 local closeAskedAt = 0
+local profileLines = {
+  false, -- Use the time-based greeting.
+  "keep going brotato",
+  "u aint rich yet lol",
+  "work harder broke boi",
+  "no abs yet",
+  "someone out there works harder than u",
+}
+local lastProfileLine = 0
 
 ------------------------------------------------------------------ helpers
 
@@ -596,6 +605,14 @@ local function setVisible(v)
   if not v then
     screenLimit = 12
     calendarMonth = nil
+  end
+  if v then
+    local choice = math.random(#profileLines - (lastProfileLine > 0 and 1 or 0))
+    if lastProfileLine > 0 and choice >= lastProfileLine then
+      choice = choice + 1
+    end
+    lastProfileLine = choice
+    noctalia.state.set("profile_line", profileLines[choice])
   end
   noctalia.state.set("visible", v)
   noctalia.log("dashboard: " .. (v and "show" or "hide"))
